@@ -270,9 +270,6 @@ class ROB
      */
     size_t countInsts(ThreadID tid);
 
-    // [Rutvik, SPT] Propagate untaint forwards and backwards
-    void propagateUntaint(ThreadID tid);
-
     // find a instr in a rob list which has a pending squash, but is not argTaintewhich has a pending squash, but is not argTainted
     // which means that we should execute this squash
     DynInstPtr getResolvedPendingSquashInst(ThreadID tid);

@@ -245,6 +245,8 @@ class InstructionQueue
     /* [Rutvik, SPT] Untaint non-mem transmitters that have reached the VP */
     void updateVisibleState();
 
+    void propagateUntaint(ThreadID tid);
+
     /** Adds a ready memory instruction to the ready list. */
     void addReadyMemInst(const DynInstPtr &ready_inst);
 

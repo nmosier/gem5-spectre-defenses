@@ -1637,10 +1637,160 @@ InstructionQueue::wakeUntaintInsts()
 void
 InstructionQueue::updateVisibleState()
 {
-    for (ThreadID tid : *activeThreads)
-        for (const DynInstPtr &inst : instList[tid])
-            if (inst->isOtherTransmit() && inst->isUnsquashable())
+    for (ThreadID tid : *activeThreads) {
+        for (const DynInstPtr &inst : instList[tid]) {
+            if (inst->isOtherTransmit() && inst->isUnsquashable()) {
                 cpu->untaintOtherTransmit(inst);
+            }
+        }
+
+        if (!cpu->disableUntaint)
+            propagateUntaint(tid);
+    }
+}
+
+void
+InstructionQueue::propagateUntaint(ThreadID tid)
+{
+    // Registers are added to a queue that has a finite limit. In terms of priority:
+    //   - The regs of older instructions are preferred to those of younger instructions.
+    //   - The dest regs of an instruction are preferred to the src regs
+    //   - The dest and src regs are added in order of index (0, 1, 2, ...)
+
+    // phys reg, size, offset, the inst being untainted, the method of untainting
+    std::vector<std::tuple<PhysRegIdPtr, uint8_t, uint8_t, DynInstPtr, UntaintMethod>> untaintQueue;
+
+    const int queueLimit = cpu->idealUntaint ? std::numeric_limits<int>::max() : cpu->freeParam;
+
+    int numIters = 0;
+    int numUntainted = 0;
+
+    do {
+        numIters++;
+
+        untaintQueue.clear();
+
+        for (auto inst : instList[tid]) {
+            if (inst->isSquashed())
+                continue;
+
+            bool destTainted = inst->isDestTainted();
+            bool argsTainted = inst->isArgsTainted();
+            BitVec& destTaintBcastMask = inst->destTaintBcastMask;
+            BitVec& argsTaintBcastMask = inst->argsTaintBcastMask;
+
+            // Clear the flags for registers that are already untainted
+
+            for (int i = 0; i < inst->numDestRegs(); i++) {
+                if (!inst->isDestIdxTainted(i)) {
+                    destTaintBcastMask.at(i) = false;
+                }
+            }
+
+            for (int i = 0; i < inst->numSrcRegs(); i++) {
+                if (!inst->isArgsIdxTainted(i)) {
+                    argsTaintBcastMask.at(i) = false;
+                }
+            }
+
+            // Forward untaint propagation
+
+            if (cpu->fwdUntaint) {
+                if (!inst->isMemTransmit() && !argsTainted && destTainted) {
+                    for (int i = 0; i < inst->numDestRegs(); i++) {
+                        if (inst->isDestIdxTainted(i) && !destTaintBcastMask.at(i)) {
+                            destTaintBcastMask.at(i) = true;
+                        }
+                    }
+                }
+            }
+
+            // Backward untaint propogation
+            if (cpu->bwdUntaint) {
+                std::string instName = inst->staticInst->getName();
+                std::vector<std::pair<RegId, PhysRegIdPtr>> bwdUntaintedRegs; // Used for logging purposes
+                const char* opcodes = "add,addi,adc,adci,sub,subi,sbb,sbbi";
+
+                if (strstr(opcodes, instName.c_str()) != nullptr)
+                {
+                    // If an ADD or SUB has an untainted dest and all but one src is untainted, then
+                    // the remaining src can be untainted
+                    // NOTE: This doesn't apply if the destination is the zero reg
+                    if (!(inst->renamedDestIdx(0)->is(IntRegClass) &&
+                          inst->renamedDestIdx(0)->index() == cpu->zeroRegIdx) &&
+                        !inst->isNonCCDestTainted() &&
+                        inst->numTaintedSrcRegs() == 1)
+                    {
+                        for (int i = 0; i < inst->numSrcRegs(); i++) {
+                            if (inst->isArgsIdxTainted(i) && !argsTaintBcastMask.at(i)) {
+                                argsTaintBcastMask.at(i) = true;
+                                bwdUntaintedRegs.push_back({inst->srcRegIdx(i), inst->renamedSrcIdx(i)});
+                                break;
+                            }
+                        }
+                    }
+                }
+                else if (instName == "mov") {
+                    // If a MOV has an untainted dest then src 2 can be untainted as well
+                    if (!destTainted && inst->isArgsIdxTainted(1) && !argsTaintBcastMask.at(1)) {
+                        bwdUntaintedRegs.push_back({inst->srcRegIdx(1), inst->renamedSrcIdx(1)});
+                        argsTaintBcastMask.at(1) = 1;
+                    }
+                }
+            }
+
+            // Now that we've propagated the untaint, if the current instruction has any dest or src regs
+            // that are waiting to be untainted, we add as many of them as we can to the queue
+
+            assert(inst->numDestRegs() <= destTaintBcastMask.size());
+            for (int i = 0; i < inst->numDestRegs(); i++) {
+                if (destTaintBcastMask.at(i) && untaintQueue.size() < queueLimit) {
+                    destTaintBcastMask.at(i) = false;
+                    auto szAndOffs = inst->getDestRegSizeAndOffs(i);
+                    untaintQueue.push_back(
+                        std::make_tuple(inst->renamedDestIdx(i), szAndOffs.first, szAndOffs.second,
+                                        inst, UntaintMethod::FwdUntaint));
+                }
+            }
+
+            assert(inst->numSrcRegs() <= argsTaintBcastMask.size());
+            for (int i = 0; i < inst->numSrcRegs(); i++) {
+                if (argsTaintBcastMask.at(i) && untaintQueue.size() < queueLimit) {
+                    argsTaintBcastMask.at(i) = false;
+                    auto szAndOffs = inst->getSrcRegSizeAndOffs(i);
+                    untaintQueue.push_back(
+                        std::make_tuple(inst->renamedSrcIdx(i), szAndOffs.first, szAndOffs.second,
+                                        inst, UntaintMethod::BwdUntaint));
+                }
+            }
+        }
+
+        for (auto t : untaintQueue) {
+            auto physReg  = std::get<0>(t);
+            auto size     = std::get<1>(t);
+            auto offset   = std::get<2>(t);
+            auto inst     = std::get<3>(t);
+            auto utMethod = std::get<4>(t);
+
+            if (cpu->readPartialTaint(physReg, size, offset)) {
+                // [Rutvik, SPT] Stat collection stuff
+
+                cpu->setUntaintMethod(physReg, utMethod);
+
+                cpu->cpuStats.TotalUntaints++;
+                if (utMethod == UntaintMethod::FwdUntaint) {
+                    cpu->cpuStats.FwdUntaints++;
+                }
+                else if (utMethod == UntaintMethod::BwdUntaint) {
+                    cpu->cpuStats.BwdUntaints++;
+                }
+            }
+
+            cpu->setPartialTaint(physReg, false, size, offset);
+        }
+
+        numUntainted += untaintQueue.size();
+    } while (cpu->idealUntaint && untaintQueue.size() > 0);
 }
 
 } // namespace o3
