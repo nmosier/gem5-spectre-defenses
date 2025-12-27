@@ -1671,11 +1671,15 @@ InstructionQueue::propagateUntaint(ThreadID tid)
         untaintQueue.clear();
 
         for (auto inst : instList[tid]) {
-            if (inst->isSquashed())
+            if (inst->isSquashed() || inst->fullyUntainted())
                 continue;
 
             bool destTainted = inst->isDestTainted();
             bool argsTainted = inst->isArgsTainted();
+            if (!destTainted && !argsTainted) {
+                inst->setFullyUntainted();
+                continue;
+            }
             BitVec& destTaintBcastMask = inst->destTaintBcastMask;
             BitVec& argsTaintBcastMask = inst->argsTaintBcastMask;
 

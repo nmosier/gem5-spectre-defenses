@@ -483,7 +483,7 @@ DynInst::getDestRegSizeAndOffs(int i) const
 }
 
 bool
-DynInst::isDestTainted() const
+DynInst::isDestTaintedImpl() const
 {
     for (int i = 0; i < numDestRegs(); i++) {
         if (isDestIdxTainted(i)) {
@@ -494,13 +494,35 @@ DynInst::isDestTainted() const
 }
 
 bool
-DynInst::isDestIdxTainted(int i) const
+DynInst::isDestTainted() const
+{
+    if (untaintedAllDests)
+        return false;
+    if (isDestTaintedImpl())
+        return true;
+    untaintedAllDests = true;
+    return false;
+}
+
+bool
+DynInst::isDestIdxTaintedImpl(int i) const
 {
     auto szAndOffs = getDestRegSizeAndOffs(i);
     auto size = szAndOffs.first;
     auto offs = szAndOffs.second;
 
     return cpu->readPartialTaint(renamedDestIdx(i), size, offs);
+}
+
+bool
+DynInst::isDestIdxTainted(int i) const
+{
+    if (untaintedDests[i])
+        return false;
+    if (isDestIdxTaintedImpl(i))
+        return true;
+    untaintedDests[i] = true;
+    return false;
 }
 
 const BitVec*
@@ -571,9 +593,10 @@ DynInst::getSrcRegSizeAndOffs(int i) const
 }
 
 bool
-DynInst::isArgsTainted() const
+DynInst::isArgsTaintedImpl() const
 {
-    if (isLoad() || isStore()) return isAddrTainted();
+    if (isLoad() || isStore())
+        return isAddrTainted();
     for (int i = 0; i < numSrcRegs(); i++) {
         if (isArgsIdxTainted(i)) {
             return true;
@@ -583,7 +606,18 @@ DynInst::isArgsTainted() const
 }
 
 bool
-DynInst::isArgsIdxTainted(int i) const
+DynInst::isArgsTainted() const
+{
+    if (untaintedAllSrcs)
+        return false;
+    if (isArgsTaintedImpl())
+        return true;
+    untaintedAllSrcs = true;
+    return false;
+}
+
+bool
+DynInst::isArgsIdxTaintedImpl(int i) const
 {
     auto szAndOffs = getSrcRegSizeAndOffs(i);
     auto size = szAndOffs.first;
@@ -596,6 +630,17 @@ DynInst::isArgsIdxTainted(int i) const
     }
 
     return cpu->readPartialTaint(renamedSrcIdx(i), size, offs);
+}
+
+bool
+DynInst::isArgsIdxTainted(int i) const
+{
+    if (untaintedSrcs[i])
+        return false;
+    if (isArgsIdxTaintedImpl(i))
+        return true;
+    untaintedSrcs[i] = true;
+    return false;
 }
 
 const BitVec*

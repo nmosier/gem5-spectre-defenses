@@ -208,6 +208,7 @@ class DynInst : public ExecContext, public RefCounted
         IsDestTainted,
         IsArgsTainted,
         HasPendingSquash,   // for branch/load, if a squash is postponed due to the tainted dependent operands
+        FullyUntainted,
         MaxFlags
     };
 
@@ -415,11 +416,15 @@ class DynInst : public ExecContext, public RefCounted
     void isUnsquashable(bool f) { instFlags[IsUnsquashable] = f; }
 
     bool isDestTainted() const;
+    bool isDestTaintedImpl() const;
     const BitVec* destIdxTaintVec(int i) const;
     bool isDestIdxTainted(int i) const;
+    bool isDestIdxTaintedImpl(int i) const;
     void setDestTaint(bool f);
     void setDestIdxTaintVec(int i, const BitVec& taintVec);
 
+    bool isArgsTaintedImpl() const;
+    bool isArgsIdxTaintedImpl(int i) const;
     bool isArgsTainted() const;
     bool isArgsIdxTainted(int i) const;
     const BitVec* argsIdxTaintVec(int i) const;
@@ -433,6 +438,10 @@ class DynInst : public ExecContext, public RefCounted
 
     BitVec destTaintBcastMask;
     BitVec argsTaintBcastMask;
+    mutable bool untaintedAllSrcs = false;
+    mutable std::bitset<16> untaintedSrcs;
+    mutable bool untaintedAllDests = false;
+    mutable std::bitset<16> untaintedDests;
 
     // Note: These are meant for loads and stores, use isArgsTainted for all other instructions
     bool isAddrTainted() const;
@@ -440,6 +449,9 @@ class DynInst : public ExecContext, public RefCounted
 
     bool hasPendingSquash() const { return instFlags[HasPendingSquash]; }
     void hasPendingSquash(bool f) { instFlags[HasPendingSquash] = f; }
+
+    void setFullyUntainted() { instFlags[FullyUntainted] = true; }
+    bool fullyUntainted() const { return instFlags[FullyUntainted]; }
 
     std::pair<uint8_t, uint8_t> getDestRegSizeAndOffs(int i) const;
     std::pair<uint8_t, uint8_t> getSrcRegSizeAndOffs(int i) const;
