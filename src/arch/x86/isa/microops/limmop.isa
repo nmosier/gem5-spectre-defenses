@@ -71,6 +71,8 @@ def template MicroLimmOpDeclare {{
     }
 
         Fault execute(ExecContext *, trace::InstRecord *) const override;
+
+        uint8_t getDataSize() const override { return dataSize; }
     };
 }};
 

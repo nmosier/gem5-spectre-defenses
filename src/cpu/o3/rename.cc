@@ -950,6 +950,8 @@ Rename::doSquash(const InstSeqNum &squashed_seq_num, ThreadID tid)
             // ownership hazard in SMT CPU, we delay the freelist update
             // until they are indeed squashed in the commit stage.
             freeingInProgress[tid].push_back(hb_it->newPhysReg);
+
+            cpu->resetUntaintMethod(hb_it->newPhysReg);            
         }
 
         // Notify potential listeners that the register mapping needs to be
@@ -1005,6 +1007,7 @@ Rename::removeFromHistory(InstSeqNum inst_seq_num, ThreadID tid)
         // the old one.
         if (hb_it->newPhysReg != hb_it->prevPhysReg) {
             freeList->addReg(hb_it->prevPhysReg);
+            cpu->resetUntaintMethod(hb_it->newPhysReg);
         }
         if (hb_it->prevPhysReg->classValue()== FloatRegClass) {
            ++stats.fpReturned;
@@ -1144,6 +1147,14 @@ Rename::renameDestRegs(const DynInstPtr &inst, ThreadID tid)
                             rename_result.second);
 
         ++stats.renamedOperands;
+
+        // [SPT]
+        // Initial tainting/untainting is actually performed next cycle when the instruction
+        // enters the ROB. However, there are some cases (e.g., due to a fault handled at
+        // commit) where an instruction may not enter the ROB but still get issued/executed.
+        // So, to be safe, conservatively mark the destination register as tainted to start.
+        // It will be properly tainted/untainted once it enters the ROB next cycle.
+        cpu->setTaint(rename_result.first, cpu->spt);
     }
 }
 

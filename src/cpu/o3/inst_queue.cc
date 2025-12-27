@@ -1149,9 +1149,11 @@ InstructionQueue::getDeferredMemInstToExecute()
 {
     for (ListIt it = deferredMemInsts.begin(); it != deferredMemInsts.end();
          ++it) {
-        if ((*it)->translationCompleted() || (*it)->isSquashed()) {
+        if ((*it)->translationCompleted() || (*it)->isSquashed() ||
+            ((*it)->onlyWaitForFence() && !(*it)->fenceDelay())) {
             DynInstPtr mem_inst = std::move(*it);
-            deferredMemInsts.erase(it);
+            mem_inst->onlyWaitForFence(false);
+            deferredMemInsts.erase(it); // TAINT LIFECYCLE: instruction is un-deferred
             return mem_inst;
         }
     }
@@ -1428,6 +1430,14 @@ InstructionQueue::addToProducers(const DynInstPtr &new_inst)
 void
 InstructionQueue::addIfReady(const DynInstPtr &inst)
 {
+    if (cpu->spt && cpu->moreTransmitInsts && !inst->readyToIssue_UT() && inst->readyToIssue()) {
+        if (!inst->isInStallList()) {
+            inst->addToStallList();
+            stalledTaintedInstList[inst->threadNumber].push_back(inst);
+        }
+        return;
+    }
+
     // If the instruction now has all of its source registers
     // available, then add it to the list of ready instructions.
     if (inst->readyToIssue()) {
@@ -1594,6 +1604,43 @@ InstructionQueue::dumpInsts()
         inst_list_it++;
         ++num;
     }
+}
+
+void
+InstructionQueue::wakeUntaintInsts()
+{
+    assert (cpu->spt);
+
+    DPRINTF(IQ, "wakeUntaintInsts begin.\n");
+
+    for (ThreadID tid : *activeThreads) {
+        for(auto it = stalledTaintedInstList[tid].begin(); it != stalledTaintedInstList[tid].end(); ) {
+            DynInstPtr inst = *it;
+            if (inst->isSquashed()) {
+                inst->removeFromStallList();
+                it = stalledTaintedInstList[tid].erase(it);
+            }
+            else if (inst->readyToIssue_UT()) {
+                inst->removeFromStallList();
+                addIfReady(inst);
+                it = stalledTaintedInstList[tid].erase(it);
+            }
+            else {
+                it++;
+            }
+        }
+    }
+
+    DPRINTF(IQ, "wakeUntaintInsts done.\n");
+}
+
+void
+InstructionQueue::updateVisibleState()
+{
+    for (ThreadID tid : *activeThreads)
+        for (const DynInstPtr &inst : instList[tid])
+            if (inst->isOtherTransmit() && inst->isUnsquashable())
+                cpu->untaintOtherTransmit(inst);
 }
 
 } // namespace o3

@@ -66,6 +66,8 @@
 #include "params/BaseO3CPU.hh"
 #include "sim/faults.hh"
 #include "sim/full_system.hh"
+#include "debug/JY.hh"
+#include "debug/ShadowL1.hh"
 
 namespace gem5
 {
@@ -130,6 +132,7 @@ Commit::Commit(CPU *_cpu, const BaseO3CPUParams &params)
         htmStops[tid] = 0;
     }
     interrupt = NoFault;
+    stalled_counter = 0;
 }
 
 std::string Commit::name() const { return cpu->name() + ".commit"; }
@@ -850,6 +853,15 @@ Commit::commit()
             if (rob->isEmpty(tid))
                 checkEmptyROB[tid] = true;
         }
+        else {  // there is no squash signal comming
+            DynInstPtr resolvedPendingSquashInst = rob->getResolvedPendingSquashInst(tid);
+            if (resolvedPendingSquashInst &&
+                commitStatus[tid] != TrapPending &&
+                resolvedPendingSquashInst->seqNum <= youngestSeqNum[tid]){
+                resolvedPendingSquashInst->hasPendingSquash(false);
+                handleSquashSignalFromROB(tid, resolvedPendingSquashInst);
+            }
+        }
 
         // ROB is only considered "empty" for previous stages if: a)
         // ROB is empty, b) there are no outstanding stores, c) IEW
@@ -958,6 +970,14 @@ Commit::commitInsts()
 
             // Try to commit the head instruction.
             bool commit_success = commitHead(head_inst, num_committed);
+
+            /*** [Jiyong,DDIFT] sanity check ***/
+            if (commit_success)
+                stalled_counter = 0;
+            else
+                stalled_counter++;
+
+            panic_if(stalled_counter >= 100000, "Braindead\n");
 
             if (commit_success) {
                 ++num_committed;
@@ -1241,6 +1261,18 @@ Commit::commitHead(const DynInstPtr &head_inst, unsigned inst_num)
                 tid, head_inst->seqNum, head_inst->pcState());
     }
 
+    // [Rutvik, SPT] When a store is committed, we need to save the taint status of the source data
+    // so that we can access it later for the shadow L1
+    if (head_inst->isStore()) {
+        auto& sqEntryTaintVec = head_inst->sqIt->dataTaintVec;
+        auto srcRegTaintVec = cpu->readTaintVec(head_inst->renamedSrcIdx(2));
+        assert(srcRegTaintVec != nullptr);
+        assert(sqEntryTaintVec.size() >= srcRegTaintVec->size());
+        for (int i = 0; i < sqEntryTaintVec.size(); i++) {
+            sqEntryTaintVec.at(i) = i < srcRegTaintVec->size() ? srcRegTaintVec->at(i) : false;
+        }
+    }
+
     // Update the commit rename map
     for (int i = 0; i < head_inst->numDestRegs(); i++) {
         renameMap[tid]->setEntry(head_inst->flattenedDestIdx(i),
@@ -1320,6 +1352,11 @@ Commit::markCompletedInsts()
             fromIEW->insts[inst_num]->setCanCommit();
         }
     }
+
+    // [SafeSpec]
+    // update load status
+    // isPrevInstsCompleted; isPrevBrsResolved
+    rob->updateVisibleState();
 }
 
 void
@@ -1496,6 +1533,74 @@ Commit::oldestReady()
         return InvalidThreadID;
     }
 }
+
+void
+Commit::handleSquashSignalFromROB(ThreadID tid, DynInstPtr &pendingMispInst)
+{
+    // only SPT has this mode
+    assert(cpu->spt);
+
+    DPRINTF(Commit, "[tid:%i]: (Lazy enabled) A pending squash [sn:%lli,0x%lx] PC %s can be resolved now\n",
+            tid,
+            pendingMispInst->seqNum,
+            pendingMispInst->seqNum,
+            pendingMispInst->pcState());
+
+    std::unique_ptr<PCStateBase> nextPC(pendingMispInst->pcState().clone());
+
+    if (pendingMispInst->isControl()) {
+        DPRINTF(Commit,
+                "[tid:%i]: (Lazy) Squashing due to branch mispred PC:%#x [sn:%i]\n",
+                tid,
+                pendingMispInst->pcState().instAddr(),
+                pendingMispInst->seqNum);
+        pendingMispInst->staticInst->advancePC(*nextPC);
+    } else if (pendingMispInst->isLoad()){
+        DPRINTF(Commit,
+            "[tid:%i]: (Lazy) Squashing due to order violation [sn:%i]\n",
+            tid, pendingMispInst->seqNum);
+    } else {
+        assert(0);
+    }
+
+
+    DPRINTF(Commit, "[tid:%i]: (Lazy) Redirecting to PC %#x\n",
+            tid, nextPC->instAddr());
+
+    commitStatus[tid] = ROBSquashing;
+
+    InstSeqNum squashed_inst = pendingMispInst->seqNum;
+
+    if (pendingMispInst->isLoad())
+        squashed_inst--;
+
+    youngestSeqNum[tid] = squashed_inst;
+
+    rob->squash(squashed_inst, tid);
+    changedROBNumEntries[tid] = true;
+
+    toIEW->commitInfo[tid].doneSeqNum = squashed_inst;
+    toIEW->commitInfo[tid].squash = true;
+    toIEW->commitInfo[tid].robSquashing = true;
+
+    if (pendingMispInst->isControl()){
+        toIEW->commitInfo[tid].mispredictInst = pendingMispInst;
+        toIEW->commitInfo[tid].branchTaken = pendingMispInst->pcState().branching();
+    } else
+        toIEW->commitInfo[tid].mispredictInst = NULL;
+
+    toIEW->commitInfo[tid].squashInst = rob->findInst(tid, squashed_inst);
+
+    if (toIEW->commitInfo[tid].mispredictInst) {
+        if (toIEW->commitInfo[tid].mispredictInst->isUncondCtrl()) {
+            toIEW->commitInfo[tid].branchTaken = true;
+        }
+        ++stats.branchMispredicts;
+    }
+
+    set(toIEW->commitInfo[tid].pc, *nextPC);
+}
+
 
 } // namespace o3
 } // namespace gem5

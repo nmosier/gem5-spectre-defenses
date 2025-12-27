@@ -68,6 +68,12 @@ class RegOpBase : public X86MicroopBase
   public:
     const uint8_t dataSize;
     const RegIndex foldOBit;
+    
+    uint8_t
+    getDataSize() const override
+    {
+        return dataSize;
+    }
 };
 
 template <typename ...Operands>

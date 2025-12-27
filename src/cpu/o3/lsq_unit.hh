@@ -60,8 +60,11 @@
 #include "cpu/timebuf.hh"
 #include "debug/HtmCpu.hh"
 #include "debug/LSQUnit.hh"
+#include "debug/JY.hh"
+#include "debug/ShadowL1.hh"
 #include "mem/packet.hh"
 #include "mem/port.hh"
+#include "cpu/o3/spt.hh"
 
 namespace gem5
 {
@@ -146,6 +149,7 @@ class LSQUnit
         /** @} */
     };
 
+  public:
     class SQEntry : public LSQEntry
     {
       private:
@@ -165,8 +169,10 @@ class LSQUnit
 
       public:
         static constexpr size_t DataSize = sizeof(_data);
+        BitVec dataTaintVec;
         /** Constructs an empty store queue entry. */
         SQEntry()
+            : dataTaintVec(DataSize, false)
         {
             std::memset(_data, 0, DataSize);
         }
@@ -195,6 +201,8 @@ class LSQUnit
         /** @} */
     };
     using LQEntry = LSQEntry;
+
+  private:
 
     /** Coverage of one address range with another */
     enum class AddrRangeCoverage
@@ -276,6 +284,18 @@ class LSQUnit
 
     /** Writes back stores. */
     void writebackStores();
+
+    /** [Jiyong, Rutvik, SPT] Updates the fenceDelay status of all loads. */
+    void updateFenceDelays();
+
+    /** [Rutvik, SPT] Propagates untaints through the LSQ. */
+    void propagateUntaint();
+
+    /** [mengjia] Update Visbible State.
+     * In the mode defence relying on fence: setup fenceDelay state.
+     * In the mode defence relying on invisibleSpec:
+     * setup readyToExpose*/
+    void updateVisibleState();
 
     /** Completes the data access that has been returned from the
      * memory system. */
@@ -451,7 +471,6 @@ class LSQUnit
     /** The load queue. */
     LoadQueue loadQueue;
 
-  private:
     /** The number of places to shift addresses in the LSQ before checking
      * for dependency violations
      */

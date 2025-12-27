@@ -69,6 +69,7 @@
 #include "cpu/timebuf.hh"
 #include "params/BaseO3CPU.hh"
 #include "sim/process.hh"
+#include "cpu/o3/spt.hh"
 
 namespace gem5
 {
@@ -319,6 +320,38 @@ class CPU : public BaseCPU
 
     void setReg(PhysRegIdPtr phys_reg, RegVal val, ThreadID tid);
     void setReg(PhysRegIdPtr phys_reg, const void *val, ThreadID tid);
+
+    /** [Rutvik, SPT] Read/set taint bit of a given register */
+    bool readTaint(PhysRegIdPtr phys_reg);
+    const BitVec* readTaintVec(PhysRegIdPtr phys_reg);
+    bool readPartialTaint(PhysRegIdPtr phys_reg, uint8_t size, uint8_t offset = 0);
+    void setTaint(PhysRegIdPtr phys_reg, bool taint);
+    void setPartialTaint(PhysRegIdPtr phys_reg, bool taint, uint8_t size, uint8_t offset = 0);
+    void setPartialTaintVec(PhysRegIdPtr phys_reg, const BitVec& taintVec, uint8_t size, uint8_t offset = 0);
+
+    UntaintMethod
+    getUntaintMethod(PhysRegIdPtr phys_reg)
+    {
+        return regFile.getUntaintMethod(phys_reg);
+    }
+
+    void
+    setUntaintMethod(PhysRegIdPtr phys_reg, UntaintMethod utMethod)
+    {
+        regFile.setUntaintMethod(phys_reg, utMethod);
+    }
+
+    void
+    resetUntaintMethod(PhysRegIdPtr phys_reg)
+    {
+        regFile.resetUntaintMethod(phys_reg);
+    }
+
+    /** [Jiyong, Rutvik, SPT] Untaint when a memory transmitter passes VP */
+    void untaintMemTransmit(DynInstPtr inst);
+
+    /** [Rutvik, SPT] Untaint when a non-memory transmitter passes VP */
+    void untaintOtherTransmit(DynInstPtr inst);
 
     /** Architectural register accessors.  Looks up in the commit
      * rename table to obtain the true physical index of the
@@ -577,6 +610,18 @@ class CPU : public BaseCPU
     {
         CPUStats(CPU *cpu);
 
+        // [Rutvik, SPT] Extra stats we collect
+        statistics::Scalar TotalUntaints;           // Every time a reg goes from tainted to untainted
+        statistics::Scalar VPUntaints;              // Secret-dependent operand reg untainted b/c a transmit reached the VP
+        statistics::Scalar FwdUntaints;             // Reg untainted b/c of fwd untaint propagation
+        statistics::Scalar BwdUntaints;             // Reg untainted b/c of bwd untaint propagation
+        statistics::Scalar SL1Untaints;             // Load dest reg untainted b/c of the shadow L1
+        statistics::Scalar STLFwdUntaints;          // Load dest reg untainted b/c of STL fwding
+        statistics::Scalar STLBwdUntaints;          // Store src reg untainted b/c of STL fwding
+        statistics::Scalar SL1UntaintedHit;         // A hit in the shadow L1 that returns untainted data
+        statistics::Scalar SL1TaintedHit;           // A hit in the shadow L1 that returns tainted data
+        statistics::Scalar SL1Miss;                 // A miss in the shadow L1 (which always returns tainted data)
+
         /** Stat for total number of times the CPU is descheduled. */
         statistics::Scalar timesIdled;
         /** Stat for total number of cycles the CPU spends descheduled. */
@@ -590,6 +635,47 @@ class CPU : public BaseCPU
     // hardware transactional memory
     void htmSendAbortSignal(ThreadID tid, uint64_t htm_uid,
                             HtmFailureFaultCause cause) override;
+
+    // flag for whether defending against spectre attack or futuristic attacks
+    bool isFuturistic;
+
+    // whether to apply DDIFT
+    bool spt;
+
+    // Eager implicit flow handling or Lazy implicit flow handling
+    bool impFlow;
+
+    // whether consider more transmit instructions
+    int moreTransmitInsts;
+
+    // whether to disable untainting
+    bool disableUntaint;
+
+    // whether to perform forward untainting
+    bool fwdUntaint;
+
+    // whether to perform backward untainting
+    bool bwdUntaint;
+
+    // whether to perform ideal untainting
+    bool idealUntaint;
+
+    // whether to use a shadow L1
+    bool enableShadowL1;
+
+    // whether the shadow L1 is bottomless, i.e. ignores evictions
+    bool bottomlessShadowL1;
+
+    // a free parameter to be used for whatever
+    int freeParam;
+
+    /** [Rutvik, SPT] Structure that shadows the L1 to implement pseudo-
+     ** taint tracking in memory. Key is address of a byte, bool indicates if
+     ** the byte is tainted
+     **/
+    std::unordered_map<Addr, bool> shadowL1;
+
+    RegIndex zeroRegIdx;
 };
 
 } // namespace o3

@@ -78,6 +78,9 @@ class MemOp : public X86MicroopBase
     const uint8_t dataSize;
     const uint8_t addressSize;
     const RegIndex foldOBit, foldABit;
+
+    uint8_t getDataSize() const override { return dataSize; }
+    uint8_t getAddrSize() const override { return addressSize; }
 };
 
 /**

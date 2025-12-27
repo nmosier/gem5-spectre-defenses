@@ -1,99 +1,144 @@
-# The gem5 Simulator
+# Evaluation Code for Speculative Privacy Tracking (SPT)
 
-This is the repository for the gem5 simulator. It contains the full source code
-for the simulator and all tests and regressions.
+### Rutvik Choudhary<sup>&#10038;</sup>, Jiyong Yu<sup>&#10038;</sup>, Chris Fletcher<sup>&#10038;</sup>, Adam Morrison<sup>†</sup>
 
-The gem5 simulator is a modular platform for computer-system architecture
-research, encompassing system-level architecture as well as processor
-microarchitecture. It is primarily used to evaluate new hardware designs,
-system software changes, and compile-time and run-time system optimizations.
+<sup>&#10038;</sup> UIUC, USA&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<sup>†</sup> Tel Aviv University, Israel
 
-The main website can be found at <http://www.gem5.org>.
+[![DOI](https://zenodo.org/badge/405761413.svg)](https://zenodo.org/badge/latestdoi/405761413)
 
-## Testing status
+## Intro
 
-**Note**: These regard tests run on the develop branch of gem5:
-<https://github.com/gem5/gem5/tree/develop>.
+This is the code we used to do the evaluations for our MICRO 2021 paper: _Speculative Privacy Tracking (SPT): Leaking Information From Speculative Execution Without Compromising Privacy_.
 
-[![Daily Tests](https://github.com/gem5/gem5/actions/workflows/daily-tests.yaml/badge.svg?branch=develop)](https://github.com/gem5/gem5/actions/workflows/daily-tests.yaml)
-[![Weekly Tests](https://github.com/gem5/gem5/actions/workflows/weekly-tests.yaml/badge.svg?branch=develop)](https://github.com/gem5/gem5/actions/workflows/weekly-tests.yaml)
-[![Compiler Tests](https://github.com/gem5/gem5/actions/workflows/compiler-tests.yaml/badge.svg?branch=develop)](https://github.com/gem5/gem5/actions/workflows/compiler-tests.yaml)
+## Citation
 
-## Getting started
+```
+@inproceedings{SPT2021,
+  title = {Speculative Privacy Tracking (SPT): Leaking Information From Speculative Execution Without Compromising Privacy},
+  author = {Rutvik Choudhary and Jiyong Yu and Christopher W. Fletcher and Adam Morrison},
+  booktitle = {Proceedings of the 54th Annual IEEE/ACM International Symposium on Microarchitecture},
+  year = {2021},
+}
+```
 
-A good starting point is <http://www.gem5.org/about>, and for
-more information about building the simulator and getting started
-please see <http://www.gem5.org/documentation> and
-<http://www.gem5.org/documentation/learning_gem5/introduction>.
+## Cloning
 
-## Building gem5
+`cd` to wherever you want your copy of the repo to live. Then run
 
-To build gem5, you will need the following software: g++ or clang,
-Python (gem5 links in the Python interpreter), SCons, zlib, m4, and lastly
-protobuf if you want trace capture and playback support. Please see
-<http://www.gem5.org/documentation/general_docs/building> for more details
-concerning the minimum versions of these tools.
+```
+git clone https://github.com/FPSG-UIUC/SPT.git
+```
 
-Once you have all dependencies resolved, execute
-`scons build/ALL/gem5.opt` to build an optimized version of the gem5 binary
-(`gem5.opt`) containing all gem5 ISAs. If you only wish to compile gem5 to
-include a single ISA, you can replace `ALL` with the name of the ISA. Valid
-options include `ARM`, `NULL`, `MIPS`, `POWER`, `RISCV`, `SPARC`, and `X86`
-The complete list of options can be found in the build_opts directory.
+**From now on, we will use `$SPT` to refer to the filepath of your local copy of the repo**
 
-See https://www.gem5.org/documentation/general_docs/building for more
-information on building gem5.
+## Building
 
-## The Source Tree
+### Requirements
 
-The main source tree includes these subdirectories:
+Tool | Version | Notes
+--- | --- | ---
+Ubuntu | 16.04 | :warning: Unfortunately the repo doesn't appear to run correctly when tested on Ubuntu 20.04 (and we haven't tested Ubuntu 18). **We suggest using Docker as described below.**
+Python | 2.7 | This is needed to build the repo. You won't invoke this manually.
+Python | 3.5+ | You will manually invoke this to run the helper script.
+SCons | 2.5.1 | :warning: SCons versions 3 and beyond will use Python 3 under the hood and will cause build failures, so **make sure you use this version!** It can't be found with Anaconda, but it _can_ be found with pip.
+g++ | 5.3.1 | This version is default installed when `apt install g++` is run on Ubuntu 16.04
 
-* build_opts: pre-made default configurations for gem5
-* build_tools: tools used internally by gem5's build process.
-* configs: example simulation configuration scripts
-* ext: less-common external packages needed to build gem5
-* include: include files for use in other programs
-* site_scons: modular components of the build system
-* src: source code of the gem5 simulator. The C++ source, Python wrappers, and Python standard library are found in this directory.
-* system: source for some optional system software for simulated systems
-* tests: regression tests
-* util: useful utility programs and files
+There might be one or two extra dependencies that aren't already on your machine, but the gem5 build scripts will let you know what is missing, and from there it's just a matter of `apt install`.
 
-## gem5 Resources
+### Using Docker
 
-To run full-system simulations, you may need compiled system firmware, kernel
-binaries and one or more disk images, depending on gem5's configuration and
-what type of workload you're trying to run. Many of these resources can be
-obtained from <https://resources.gem5.org>.
+In order to make the build process easier, [we have published a Docker image to DockerHub](https://hub.docker.com/r/rutvikc/spt) that you can run SPT in. The advantage of using Docker is that it has all the necessary dependencies to build and run SPT _including_ the correct OS!
 
-More information on gem5 Resources can be found at
-<https://www.gem5.org/documentation/general_docs/gem5_resources/>.
+Within the container, this git repo has already been cloned and resides at `/home/SPT`. Note that the Docker image might not be the most up-to-date version of SPT, so it's a good idea to do a `git pull` after starting up a Docker container.
 
-## Getting Help, Reporting bugs, and Requesting Features
+To get this image locally run `docker pull rutvikc/spt`. After it finishes, when you run `docker images` you should see an image called `rutvikc/spt`.
 
-We provide a variety of channels for users and developers to get help, report
-bugs, requests features, or engage in community discussions. Below
-are a few of the most common we recommend using.
+This is not intended to be a Docker tutorial, so we will leave out any further details.
 
-* **GitHub Discussions**: A GitHub Discussions page. This can be used to start
-discussions or ask questions. Available at
-<https://github.com/orgs/gem5/discussions>.
-* **GitHub Issues**: A GitHub Issues page for reporting bugs or requesting
-features. Available at <https://github.com/gem5/gem5/issues>.
-* **Jira Issue Tracker**: A Jira Issue Tracker for reporting bugs or requesting
-features. Available at <https://gem5.atlassian.net/>.
-* **Slack**: A Slack server with a variety of channels for the gem5 community
-to engage in a variety of discussions. Please visit
-<https://www.gem5.org/join-slack> to join.
-* **gem5-users@gem5.org**: A mailing list for users of gem5 to ask questions
-or start discussions. To join the mailing list please visit
-<https://www.gem5.org/mailing_lists>.
-* **gem5-dev@gem5.org**: A mailing list for developers of gem5 to ask questions
-or start discussions. To join the mailing list please visit
-<https://www.gem5.org/mailing_lists>.
+### Build Command
 
-## Contributing to gem5
+`cd` into `$SPT` and run
 
-We hope you enjoy using gem5. When appropriate we advise sharing your
-contributions to the project. <https://www.gem5.org/contributing> can help you
-get started. Additional information can be found in the CONTRIBUTING.md file.
+```
+scons build/X86_MESI_Two_Level/gem5.fast -j <num cores>
+```
+
+## Running
+
+Running the gem5 executable directly is a bit complicated since there are some legacy command-line options from previous projects. Thus it is **highly** recommended that you use the helper script `run_spt.py`. **You need to run it with Python version 3.5 or later!**
+
+**Note:** If you want to see the actual command that is run, gem5 prints it near the start.
+
+**Note:** Our helper script targets syscall emulation mode for gem5. For full system mode, you're on your own unfortunately.
+
+### Configuration Options for Helper Script
+
+Parameter | Values | Description | Requirements/Restrictions
+--- | --- | --- | ---
+`--executable` | Filesystem Path | The executable you want to run with gem5 | Required
+`--enable-spt` | n/a | Enables SPT's protection mechanism (if this is left out then then you have the `UnsafeBaseline`) | Not required
+`--threat-model` | `spectre`, `futuristic` | Which threat model to simulate under (see paper for details) | Required if `--enable-spt` is specified
+`--untaint-method` | `none`, `fwd`, `bwd`, `ideal` | What type of untaint propagation to allow (see paper for details) | Required if `--enable-spt` is specified
+`--enable-shadow-l1` | n/a | Enables the shadow L1 (aka taint tracking through the L1 cache) | Cannot be specified if `--enable-shadow-mem` was specified
+`--enable-shadow-mem` | n/a | Enables shadow memory (aka taint tracking  through all of memory) | Cannot be specified if `--enable-shadow-l1` was specified
+
+### Miscellaneous Options for Helper Script
+
+Parameter | Values | Description | Requirements/Restrictions
+--- | --- | --- | --- |
+`--track-insts` | n/a | If this is specified, then gem5 will output detailed taint tracking information. This is recommended if you wish to observe the flow of taint/untaint through your program. Note that a _lot_ of output will be produced! | Can only be specified if `--enable-spt` is specified
+`--output-dir` | Filesystem Path | This is the directory where the output `stats.txt` file will be generated. Note that whatever directory you specify here will be created. If unspecified, then it will create a directory `m5out` in `$SPT` and put `stats.txt` there. | Not required
+
+
+### Running Configurations from the Paper
+
+Listed below are the configurations that we evaluated in our paper and the corresponding parameters to `run_spt.py`. We have omitted the following parameters in the table since their values are user-dependent:
+
+  * `--executable`
+  * `--threat-model`
+  * `--track-insts`
+
+Configuration from Paper | Parameters
+--- | ---
+SecureBaseline | `--enable-spt --untaint-method=none`
+Fwd, NoShadowL1 | `--enable-spt --untaint-method=fwd`
+Bwd, NoShadowL1 | `--enable-spt --untaint-method=bwd`
+Bwd, ShadowL1 | `--enable-spt --untaint-method=bwd --enable-shadow-l1`
+Bwd, ShadowMem | `--enable-spt --untaint-method=bwd --enable-shadow-mem`
+Ideal, ShadowMem | `--enable-spt --untaint-method=ideal --enable-shadow-mem`
+
+To run the InsecureBaseline, provide _only_ the `--executable` parameter.
+
+## Getting the Results
+
+When gem5 is run, it will create a file called `stats.txt` in the directory you specified with `--output-dir`. If you _didn't_ specify `--output-dir` then `stats.txt` will be in `$SPT/m5out`.
+
+In this file are many statistics, though the one of most interest will be `numCycles`, which specifies how many cycles the program took to execute. There many other statistics provided by gem5 that have comments next to them briefly describing what they are.
+
+On top of the statistics provided by gem5, we provide some custom statistics as well:
+
+Statistic | Description
+--- | ---
+TotalUntaints          | Every time a register goes from tainted to untainted
+VPUntaints             | Secret-dependent operand register untainted because a transmit reached the visibility point
+FwdUntaints            | Register untainted because of forward untaint propagation
+BwdUntaints            | Register untainted because of backward untaint propagation
+SL1Untaints            | Load destination register untainted because of the shadow L1
+DelayedSL1Untaints     | Load destination register untainted because of the shadow L1 (but had to wait until `STLPublic` was true)
+STLFwdUntaints         | Load destination register untainted because of store-to-load forwarding
+STLBwdUntaints         | Store source register untainted because of store-to-load forwarding
+DelayedSTLFwdUntaints  | Load destination register untainted because of store-to-load forwarding (but had to wait until `STLPublic` was true)
+DelayedSTLBwdUntaints  | Store source register untainted because of store-to-load forwarding (but had to wait until `STLPublic` was true)
+SL1UntaintedHit        | A hit in the shadow L1 that returns untainted data
+SL1TaintedHit          | A hit in the shadow L1 that returns tainted data
+DelayedSL1UntaintedHit | A hit in the shadow L1 that returns untainted data (but had to wait until `STLPublic` was true)
+DelayedSL1TaintedHit   | A hit in the shadow L1 that returns tainted data (but had to wait until `STLPublic` was true)
+SL1Miss                | A miss in the shadow L1 (which always returns tainted data)
+DelayedSL1Miss         | A miss in the shadow L1 (which always returns tainted data, had to wait until `STLPublic` was true)
+
+For more details/explanation on these events, see our paper.
+
+## Browsing the Code
+
+If you want to look for our specific additions, a good string to search for is `Rutvik, SPT`. That should indicate where most of the changes are. There may be some others that can be seen, but these locations will serve as a good starting point.
+

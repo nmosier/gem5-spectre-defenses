@@ -93,6 +93,12 @@ class MediaOpBase : public X86MicroopBase
   public:
     uint8_t getSrcSize() const { return srcSize; }
     uint8_t getDestSize() const { return destSize; }
+
+    uint8_t
+    getDataSize() const override
+    {
+        return std::max(srcSize, destSize);
+    }
 };
 
 } // namespace X86ISA

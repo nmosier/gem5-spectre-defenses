@@ -689,6 +689,32 @@ def addCommonOptions(parser, default_isa: Optional[ISA] = None):
         help="Override vendor string returned by CPUID instruction in X86.",
     )
 
+    # [SafeSpec] add options to configure needsTSO and scheme
+    parser.add_argument("--scheme", default="UnsafeBaseline",
+            choices=["UnsafeBaseline", "FuturisticSafeFence",
+                     "SpectreSafeFence"],
+            help="choose baseline or defense designs to evaluate")
+    # [Jiyong,DDIFT] add options for DDIFT configurations
+    parser.add_argument("--spt", default=0, type=int,
+            help="Enable SPT.")
+    parser.add_argument("--impFlow", default=0, type=int,
+            help="implicit flow handling mechanism")
+    parser.add_argument("--moreTransmitInsts", default=0, type=int,
+            help="Include more transmit instruction types.")
+    parser.add_argument("--disableUntaint", default=0, type=int,
+            help="Whether to disable untainting")
+    parser.add_argument("--fwdUntaint", default=0, type=int,
+            help="Whether to perform forward untainting")
+    parser.add_argument("--bwdUntaint", default=0, type=int,
+            help="Whether to perform backward untainting")
+    parser.add_argument("--idealUntaint", default=0, type=int,
+            help="Whether to perform ideal untainting")
+    parser.add_argument("--enableShadowL1", default=0, type=int,
+            help="Whether to use the shadow L1 cache")
+    parser.add_argument("--bottomlessShadowL1", default=0, type=int,
+            help="Whether the shadow L1 cache is bottomless, i.e. whether it ignores evictions")
+    parser.add_argument("--freeParam", default=0, type=int,
+            help="A free variable to be used for whatever")
 
 def addSEOptions(parser):
     # Benchmark options

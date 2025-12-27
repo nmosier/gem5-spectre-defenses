@@ -57,6 +57,7 @@
 #include "debug/IEW.hh"
 #include "debug/O3PipeView.hh"
 #include "params/BaseO3CPU.hh"
+#include "debug/JY.hh"
 
 namespace gem5
 {
@@ -1191,6 +1192,20 @@ IEW::executeInsts()
             } else if (inst->isLoad()) {
                 // Loads will mark themselves as executed, and their writeback
                 // event adds the instruction to the queue to commit
+
+                // [SafeSpec] a lifetime of a load
+                // always let it translate --> translation not complete, defer
+                if (inst->fenceDelay()) {
+                    DPRINTF(IEW, "Deferring load due to virtual fence.\n");
+                    inst->onlyWaitForFence(true);
+                    instQueue.deferMemInst(inst); // TAINT LIFECYCLE: inst has been delayed
+                    DPRINTF(JY, "A load [sn:%lli] is delayed. PC: %s; instr: %s\n",
+                            inst->seqNum, inst->pcState(),
+                            inst->staticInst->disassemble(inst->pcState().instAddr()));
+
+                    continue;
+                }
+
                 fault = ldstQueue.executeLoad(inst);
 
                 if (inst->isTranslationDelayed() &&
@@ -1207,6 +1222,17 @@ IEW::executeInsts()
                     inst->fault = NoFault;
                 }
             } else if (inst->isStore()) {
+                if (inst->fenceDelay()) {
+                    DPRINTF(IEW, "Deferring store due to virtual fence.\n");
+                    inst->onlyWaitForFence(true);
+                    instQueue.deferMemInst(inst); // TAINT LIFECYCLE: inst has been delayed
+                    DPRINTF(JY, "A store [sn:%lli] is delayed. PC: %s; instr: %s\n",
+                            inst->seqNum, inst->pcState(),
+                            inst->staticInst->disassemble(inst->pcState().instAddr()));
+
+                    continue;
+                }
+
                 fault = ldstQueue.executeStore(inst);
 
                 if (inst->isTranslationDelayed() &&
@@ -1266,7 +1292,19 @@ IEW::executeInsts()
         // instruction first, so the branch resolution order will be correct.
         ThreadID tid = inst->threadNumber;
 
-        if (!fetchRedirect[tid] ||
+
+	if (cpu->spt && inst->isControl() && inst->mispredicted() && inst->isArgsTainted() && !inst->isUnsquashable()) {
+	    // The instruction is a branch which was mispredicted but tainted.
+	    // In order to avoid this tainted mispredicted branch from hiding
+	    // a younger *untainted* branch misprediction (which would create
+	    // a secret-dependent squash signal), instead just directly mark
+	    // this instruction as having a pending squash. This is functionally
+	    // equivalent to sending all tainted branch mispredictions to the
+	    // commit stage.
+	    DPRINTF(IEW, "[tid:%i] [sn:%llu] Execute: Tainted branch misprediction detected.\n",
+		  tid, inst->seqNum);
+	    inst->hasPendingSquash(true);
+	} else if (!fetchRedirect[tid] ||
             !toCommit->squash[tid] ||
             toCommit->squashedSeqNum[tid] > inst->seqNum) {
 
@@ -1275,6 +1313,9 @@ IEW::executeInsts()
             bool loadNotExecuted = !inst->isExecuted() && inst->isLoad();
 
             if (inst->mispredicted() && !loadNotExecuted) {
+                panic_if(cpu->spt && inst->isArgsTainted() && !inst->isUnsquashable(),
+                         "Tainted input to branch: %s\n",
+                         inst->staticInst->disassemble(0));
                 fetchRedirect[tid] = true;
 
                 DPRINTF(IEW, "[tid:%i] [sn:%llu] Execute: "
@@ -1298,6 +1339,7 @@ IEW::executeInsts()
                 }
             } else if (ldstQueue.violation(tid)) {
                 assert(inst->isMemRef());
+		assert(!(cpu->spt && inst->isLoad() && inst->isArgsTainted()));
                 // If there was an ordering violation, then get the
                 // DynInst that caused the violation.  Note that this
                 // clears the violation signal.
@@ -1431,10 +1473,17 @@ IEW::tick()
         dispatch(tid);
     }
 
+    ldstQueue.updateVisibleState();
+    instQueue.updateVisibleState();
+
     if (exeStatus != Squashing) {
         executeInsts();
 
         writebackInsts();
+
+        if (cpu->spt && cpu->moreTransmitInsts) {
+            instQueue.wakeUntaintInsts();
+        }
 
         // Have the instruction queue try to schedule any ready instructions.
         // (In actuality, this scheduling is for instructions that will

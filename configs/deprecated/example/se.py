@@ -294,5 +294,9 @@ system.workload = SEWorkload.init_compatible(mp0_path)
 if args.wait_gdb:
     system.workload.wait_for_remote_gdb = True
 
+# [SafeSpec] Configure simulation scheme
+if CPUClass == DerivO3CPU:
+    CpuConfig.config_scheme(CPUClass, system.cpu, args)
+
 root = Root(full_system=False, system=system)
 Simulation.run(args, root, system, FutureClass)

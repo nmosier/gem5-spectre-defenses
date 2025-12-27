@@ -394,6 +394,10 @@ class StaticInst : public RefCounted, public StaticInstFlags
      * buffer if there wasn't enough space.
      */
     virtual size_t asBytes(void *buf, size_t max_size) { return 0; }
+
+    // Rutvik, SPT
+    virtual uint8_t getDataSize() const { return 0; }
+    virtual uint8_t getAddrSize() const { return 0; }
 };
 
 } // namespace gem5

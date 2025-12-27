@@ -41,11 +41,15 @@
 #include "cpu/o3/dyn_inst.hh"
 
 #include <algorithm>
+#include <limits>
 
 #include "base/intmath.hh"
 #include "debug/DynInst.hh"
 #include "debug/IQ.hh"
 #include "debug/O3PipeView.hh"
+#include "cpu/op_class.hh"
+#include "cpu/o3/regfile.hh"
+#include "arch/x86/regs/int.hh"
 
 namespace gem5
 {
@@ -90,6 +94,8 @@ DynInst::DynInst(const Arrays &arrays, const StaticInstPtr &static_inst,
     cpu->snList.insert(seqNum);
 #endif
 
+    destTaintBcastMask = BitVec(numDestRegs(), false);
+    argsTaintBcastMask = BitVec(numSrcRegs(), false);
 }
 
 DynInst::DynInst(const Arrays &arrays, const StaticInstPtr &static_inst,
@@ -454,6 +460,284 @@ DynInst::initiateMemAMO(Addr addr, unsigned size, Request::Flags flags,
             /* atomic */ false, nullptr, size, addr, flags, nullptr,
             std::move(amo_op), std::vector<bool>(size, true));
 }
+
+bool
+DynInst::readyToIssue_UT() const
+{
+    bool ret = status[CanIssue];
+    if (isOtherTransmit()) {
+        ret = ret && !isArgsTainted();
+    }
+    return ret;
+}
+
+std::pair<uint8_t, uint8_t>
+DynInst::getDestRegSizeAndOffs(int i) const
+{
+    auto archReg = destRegIdx(i);
+    bool isIntReg = archReg.classValue() == IntRegClass;
+    bool intFoldBit = archReg.index() & X86ISA::IntFoldBit;
+    uint8_t size = isIntReg ? staticInst->getDataSize() : 8;
+    uint8_t offset = isIntReg && intFoldBit ? 1 : 0;
+    return std::make_pair(size, offset);    
+}
+
+bool
+DynInst::isDestTainted() const
+{
+    for (int i = 0; i < numDestRegs(); i++) {
+        if (isDestIdxTainted(i)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool
+DynInst::isDestIdxTainted(int i) const
+{
+    auto szAndOffs = getDestRegSizeAndOffs(i);
+    auto size = szAndOffs.first;
+    auto offs = szAndOffs.second;
+
+    return cpu->readPartialTaint(renamedDestIdx(i), size, offs);
+}
+
+const BitVec*
+DynInst::destIdxTaintVec(int i) const
+{
+    return cpu->readTaintVec(renamedDestIdx(i));
+}
+
+void
+DynInst::setDestTaint(bool f)
+{
+    for (int i = 0; i < numDestRegs(); i++) {
+        auto archReg = destRegIdx(i);
+        auto szAndOffs = getDestRegSizeAndOffs(i);
+        bool uncondUntaint = false;
+        bool newTaint = (uncondUntaint) ? false : f;
+        cpu->setPartialTaint(renamedDestIdx(i), newTaint, szAndOffs.first, szAndOffs.second);
+
+        // On x86, writes to 32-bit subregisters (e.g., EAX) zero the upper
+        // 32 bits of the full 64-bit register (e.g., RAX). So, we can safely
+        // untaint all 64 bits for 32-bit register writes.
+        if (archReg.classValue() == IntRegClass && szAndOffs.first == 4 &&
+            szAndOffs.second == 0) {
+            cpu->setPartialTaint(renamedDestIdx(i), false, 4, 4);
+        }
+    }
+}
+
+void
+DynInst::setDestIdxTaintVec(int i, const BitVec& taintVec)
+{
+    auto archReg = destRegIdx(i);
+    auto szAndOffs = getDestRegSizeAndOffs(i);
+    cpu->setPartialTaintVec(renamedDestIdx(i), taintVec, szAndOffs.first, szAndOffs.second);
+
+    // On x86, writes to 32-bit subregisters (e.g., EAX) zero the upper
+    // 32 bits of the full 64-bit register (e.g., RAX). So, we can safely
+    // untaint all 64 bits for 32-bit register writes.
+    if (archReg.classValue() == IntRegClass && szAndOffs.first == 4 &&
+        szAndOffs.second == 0) {
+        cpu->setPartialTaint(renamedDestIdx(i), false, 4, 4);
+    }
+}
+
+std::pair<uint8_t, uint8_t>
+DynInst::getSrcRegSizeAndOffs(int i) const
+{
+    auto archReg = srcRegIdx(i);
+    bool isIntReg = archReg.classValue() == IntRegClass;
+    bool intFoldBit = archReg.index() & X86ISA::IntFoldBit;
+    uint8_t offset = isIntReg && intFoldBit ? 1 : 0;
+    uint8_t size = 0;
+    if (isIntReg) {
+        if (isLoad()) {
+            size = (i == 2) ? getDestRegSizeAndOffs(0).first : staticInst->getAddrSize();
+        }
+        else if (isStore()) {
+            size = (i == 2) ? staticInst->getDataSize() : staticInst->getAddrSize();
+        }
+        else {
+            size = staticInst->getDataSize();
+        }
+    }
+    else {
+        size = 8;
+    }
+    return std::make_pair(size, offset);
+}
+
+bool
+DynInst::isArgsTainted() const
+{
+    if (isLoad() || isStore()) return isAddrTainted();
+    for (int i = 0; i < numSrcRegs(); i++) {
+        if (isArgsIdxTainted(i)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool
+DynInst::isArgsIdxTainted(int i) const
+{
+    auto szAndOffs = getSrcRegSizeAndOffs(i);
+    auto size = szAndOffs.first;
+    auto offs = szAndOffs.second;
+
+    if (isStore() && isCommitted() && i == 2) {
+        const BitVec& bitVec = sqIt->dataTaintVec;
+        assert(offs + size <= bitVec.size());
+        return std::any_of(bitVec.begin() + offs, bitVec.begin() + offs + size, [](bool b){ return b; });
+    }
+
+    return cpu->readPartialTaint(renamedSrcIdx(i), size, offs);
+}
+
+const BitVec*
+DynInst::argsIdxTaintVec(int i) const
+{
+    if (isStore() && isCommitted() && i == 2)
+        return &sqIt->dataTaintVec;
+    return cpu->readTaintVec(renamedSrcIdx(i));
+}
+
+void
+DynInst::setArgsTaint(bool f)
+{
+    for (int i = 0; i < numSrcRegs(); i++) {
+        setArgsIdxTaint(i, f);
+    }
+}
+
+void
+DynInst::setArgsIdxTaint(int i, bool taint)
+{
+    auto szAndOffs = getSrcRegSizeAndOffs(i);
+    auto size = szAndOffs.first;
+    auto offs = szAndOffs.second;
+
+    if (isStore() && i == 2) {
+        BitVec& bitVec = sqIt->dataTaintVec;
+        assert(size + offs <= bitVec.size());
+        for (int i = 0; i < size; i++) {
+            bitVec.at(i + offs) = taint;
+        }
+    }
+
+    if (!isCommitted()) {
+        cpu->setPartialTaint(renamedSrcIdx(i), taint, size, offs);
+    }
+}
+
+void
+DynInst::setArgsIdxTaintVec(int i, const BitVec& taintVec)
+{
+    auto szAndOffs = getSrcRegSizeAndOffs(i);
+    auto size = szAndOffs.first;
+    auto offs = szAndOffs.second;
+
+    bool uncondUntaint = false;
+
+    if (isStore() && i == 2) {
+        BitVec& bitVec = sqIt->dataTaintVec;
+        assert(size + offs <= bitVec.size());
+        for (int i = 0; i < size; i++) {
+            bitVec.at(i + offs) = uncondUntaint ? false : taintVec.at(i + offs);
+        }
+    }
+
+    if (!isCommitted()) {
+        if (uncondUntaint) {
+            cpu->setPartialTaint(renamedSrcIdx(i), false, size, offs);
+        }
+        else {
+            cpu->setPartialTaintVec(renamedSrcIdx(i), taintVec, size, offs);
+        }
+    }
+}
+
+bool
+DynInst::isNonCCDestTainted() const
+{
+    for (int i = 0; i < numDestRegs(); i++) {
+        if (renamedDestIdx(i)->is(CCRegClass))
+            continue;
+        if (isDestIdxTainted(i)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool
+DynInst::isAddrTainted() const
+{
+    if (!isMemRef()) return false;
+    if (isCommitted()) return false;
+    bool addrTainted = false;
+    for (int i = 0; i < numSrcRegs(); i++) {
+        if ((isStore() || (isLoad() && numSrcRegs() == 4)) && i == 2) continue;
+        addrTainted |= isArgsIdxTainted(i);
+    }
+    return addrTainted;
+}
+
+void
+DynInst::setAddrTaint(bool b)
+{
+    if (!isMemRef()) return;
+    if (isCommitted()) return;
+    for (int i = 0; i < numSrcRegs(); i++) {
+        if ((isStore() || (isLoad() && numSrcRegs() == 4)) && i == 2) continue;
+        setArgsIdxTaint(i, b);
+        cpu->setUntaintMethod(renamedSrcIdx(i), UntaintMethod::ReachedVP);
+    }
+}
+
+unsigned int
+DynInst::numTaintedDestRegs()
+{
+    unsigned int counter = 0;
+    for (int i = 0; i < numDestRegs(); i++) {
+        if (isDestIdxTainted(i)) counter++;
+    }
+    return counter;
+}
+
+unsigned int
+DynInst::numTaintedSrcRegs()
+{
+    unsigned int counter = 0;
+    for (int i = 0; i < numSrcRegs(); i++) {
+        if (isArgsIdxTainted(i)) counter++;
+    }
+    return counter;
+}
+
+unsigned int
+DynInst::numTaintedAddrRegs()
+{
+    if (!isMemRef()) return 0;
+    if (isCommitted()) return 0;
+    unsigned int counter = 0;
+    for (int i = 0; i < numSrcRegs(); i++) {
+        if ((isStore() || (isLoad() && numSrcRegs() == 4)) && i == 2) continue;
+        if (isArgsIdxTainted(i)) counter++;
+    }
+    return counter;
+}
+
+void
+DynInst::fenceDelay(bool f)
+{
+    instFlags[FenceDelay] = f;
+}
+
 
 } // namespace o3
 } // namespace gem5

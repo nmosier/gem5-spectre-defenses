@@ -63,6 +63,8 @@ class FpOp : public X86MicroopBase
   public:
     const uint8_t dataSize;
     const RegIndex foldOBit;
+
+    uint8_t getDataSize() const override { return dataSize; }        
 };
 
 } // namespace X86ISA

@@ -47,6 +47,39 @@ isa_string_map = {
     ISA.MIPS: "Mips",
 }
 
+# [SafeSpec] add knob to configure the CPU modes/simulation schemes
+def config_scheme(cpu_cls, cpu_list, options):
+    if issubclass(cpu_cls, m5.objects.DerivO3CPU):
+        # Assign the same file name to all cpus for now.
+        if options.scheme==None:
+            fatal("Need to provide scheme "
+                "to run simulation with DerivO3CPU")
+
+        print("**********")
+        print("info: Configure for DerivO3CPU. scheme=%s; spt=%s; implicitFlow=%s; " \
+            "moreTransmitInsts=%s, disableUntaint=%s, fwdUntaint=%s, bwdUntaint=%s, " \
+            "idealUntaint=%s, enableShadowL1=%s, bottomlessShadowL1=%s, freeParam=%s, " \
+            % (options.scheme, str(options.spt), str(options.impFlow),
+                str(options.moreTransmitInsts),
+                str(options.disableUntaint), str(options.fwdUntaint), str(options.bwdUntaint), str(options.idealUntaint),
+                str(options.enableShadowL1), str(options.bottomlessShadowL1), str(options.freeParam)))
+        for cpu in cpu_list:
+            cpu.spt = bool(options.spt)
+            cpu.moreTransmitInsts = options.moreTransmitInsts
+            cpu.disableUntaint = bool(options.disableUntaint)
+            cpu.fwdUntaint = bool(options.fwdUntaint)
+            cpu.bwdUntaint = bool(options.bwdUntaint)
+            cpu.idealUntaint = bool(options.idealUntaint)
+            cpu.enableShadowL1 = bool(options.enableShadowL1)
+            cpu.bottomlessShadowL1 = bool(options.bottomlessShadowL1)
+            cpu.freeParam = options.freeParam
+            if len(str(options.scheme)) != 0:
+                cpu.simulateScheme = options.scheme
+            cpu.impFlow = bool(options.impFlow)
+    else:
+        print("not DerivO3CPU")
+
+
 
 def config_etrace(cpu_cls, cpu_list, options):
     if issubclass(cpu_cls, m5.objects.DerivO3CPU):

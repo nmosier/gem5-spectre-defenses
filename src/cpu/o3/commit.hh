@@ -55,6 +55,7 @@
 #include "cpu/timebuf.hh"
 #include "enums/CommitPolicy.hh"
 #include "sim/probe/probe.hh"
+#include "cpu/o3/spt.hh"
 
 namespace gem5
 {
@@ -304,6 +305,14 @@ class Commit
     /** Returns the thread ID to use based on an oldest instruction policy. */
     ThreadID oldestReady();
 
+    /*** [Jiyong,DDIFT] ***/
+    /** Process the squash signal from IEW stage if a squash needs to be handled at current cycle.
+     *  ifFromIEW=true indicates the current squash signal is from IEW stage
+     *  ifFromIEW=false indicates the current squash signal is from pending mispredicted instr(must enable DDIFT) */
+    void handleSquashSignalFromIEW(ThreadID tid);
+    void handleSquashSignalFromROB(ThreadID tid, DynInstPtr &pendingMispInst);
+
+
   public:
     /** Reads the PC of a specific thread. */
     const PCStateBase &pcState(ThreadID tid) { return *pc[tid]; }
@@ -454,6 +463,7 @@ class Commit
         a possible livelock senario.  */
     bool avoidQuiesceLiveLock;
 
+    int stalled_counter;
     /** Updates commit stats based on this instruction. */
     void updateComInstStats(const DynInstPtr &inst);
 

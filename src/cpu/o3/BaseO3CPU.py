@@ -217,3 +217,17 @@ class BaseO3CPU(BaseCPU):
     recvRespBufferSize = Param.Unsigned(
         64, "Maximum number of receive response bytes per cycle"
     )
+
+    # SPT
+    simulateScheme = Param.String('UnsafeBaseline',
+                                   "The scheme specificed for simulation")
+    spt = Param.Bool(False, "Enable SPT")
+    impFlow = Param.Bool(False, "Whether to secure implicit flows")
+    moreTransmitInsts = Param.Int(0, "More transmit instruction types")
+    disableUntaint = Param.Bool(False, "Whether to disable untainting")
+    fwdUntaint = Param.Bool(False, "Whether to perform forward untainting")
+    bwdUntaint = Param.Bool(False, "Whether to perform backward untainting")
+    idealUntaint = Param.Bool(False, "Whether to perform ideal untainting")
+    enableShadowL1 = Param.Bool(False, "Whether to enable the shadow L1 cache")
+    bottomlessShadowL1 = Param.Bool(False, "Whether the shadow L1 cache is bottomless, i.e. ignores evictions")
+    freeParam = Param.Int(1, "A free parameter to be used for whatever")

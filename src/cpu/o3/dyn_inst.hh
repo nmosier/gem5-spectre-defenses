@@ -63,6 +63,7 @@
 #include "cpu/static_inst.hh"
 #include "cpu/translation.hh"
 #include "debug/HtmCpu.hh"
+#include "cpu/o3/spt.hh"
 
 namespace gem5
 {
@@ -168,6 +169,18 @@ class DynInst : public ExecContext, public RefCounted
                                  /// instructions ahead of it
         SerializeAfter,          /// Needs to serialize instructions behind it
         SerializeHandled,        /// Serialization has been handled
+
+        // (should set when expose is sent out)
+        PrevInstsCompleted, // all prev instrs are completed
+        // indicate whether previous instructions completed
+        PrevBrsResolved, // all prev branches are completed
+        // [mengjia] indicate whether previous branches are resolved
+        PrevInstsCommitted,
+        // indicate whether previous instructions committed
+        PrevBrsCommitted,
+        // [SafeSpec] it hits in L1 and is open to invalidations
+        /*** [Jiyong,DDIFT] ***/
+        InStallList,    // instruction is ready to issue(regsReady) but argsTainted
         NumStatus
     };
 
@@ -189,6 +202,12 @@ class DynInst : public ExecContext, public RefCounted
         HtmFromTransaction,
         NoCapableFU,           /// Processor does not have capability to
                                /// execute the instruction
+        FenceDelay,
+        OnlyWaitForFence,
+        IsUnsquashable,
+        IsDestTainted,
+        IsArgsTainted,
+        HasPendingSquash,   // for branch/load, if a squash is postponed due to the tainted dependent operands
         MaxFlags
     };
 
@@ -356,6 +375,10 @@ class DynInst : public ExecContext, public RefCounted
     ssize_t sqIdx = -1;
     typename LSQUnit::SQIterator sqIt;
 
+    // [Rutvik, SPT] Store-to-load forwarding stuff
+    int16_t stFwdIdx = -1;
+    typename LSQUnit::SQIterator stFwdIt;
+    InstSeqNum stFwdSeqNum = 0;
 
     /////////////////////// TLB Miss //////////////////////
     /**
@@ -380,6 +403,49 @@ class DynInst : public ExecContext, public RefCounted
     bool memOpDone() const { return instFlags[MemOpDone]; }
     void memOpDone(bool f) { instFlags[MemOpDone] = f; }
 
+    bool fenceDelay() const { return instFlags[FenceDelay]; }
+    void fenceDelay(bool f);
+
+    bool onlyWaitForFence() const { return instFlags[OnlyWaitForFence]; }
+    void onlyWaitForFence(bool f) { instFlags[OnlyWaitForFence] = f; }
+
+    /*** [Jiyong, Rutvik, SPT] ***/
+
+    bool isUnsquashable() const { return instFlags[IsUnsquashable]; }
+    void isUnsquashable(bool f) { instFlags[IsUnsquashable] = f; }
+
+    bool isDestTainted() const;
+    const BitVec* destIdxTaintVec(int i) const;
+    bool isDestIdxTainted(int i) const;
+    void setDestTaint(bool f);
+    void setDestIdxTaintVec(int i, const BitVec& taintVec);
+
+    bool isArgsTainted() const;
+    bool isArgsIdxTainted(int i) const;
+    const BitVec* argsIdxTaintVec(int i) const;
+    void setArgsTaint(bool f);
+    void setArgsIdxTaint(int i, bool taint);
+    void setArgsIdxTaintVec(int i, const BitVec& taintVec);
+
+    unsigned int numTaintedDestRegs();
+    unsigned int numTaintedSrcRegs();
+    unsigned int numTaintedAddrRegs();
+
+    BitVec destTaintBcastMask;
+    BitVec argsTaintBcastMask;
+
+    // Note: These are meant for loads and stores, use isArgsTainted for all other instructions
+    bool isAddrTainted() const;
+    void setAddrTaint(bool b);
+
+    bool hasPendingSquash() const { return instFlags[HasPendingSquash]; }
+    void hasPendingSquash(bool f) { instFlags[HasPendingSquash] = f; }
+
+    std::pair<uint8_t, uint8_t> getDestRegSizeAndOffs(int i) const;
+    std::pair<uint8_t, uint8_t> getSrcRegSizeAndOffs(int i) const;
+
+    bool isNonCCDestTainted() const;
+  
     bool notAnInst() const { return instFlags[NotAnInst]; }
     void setNotAnInst() { instFlags[NotAnInst] = true; }
 
@@ -568,6 +634,27 @@ class DynInst : public ExecContext, public RefCounted
     {
         return staticInst->isSerializeAfter() || status[SerializeAfter];
     }
+
+    // [Jiyong, DDIFT] The following are DDIFT status
+    // Instruction is an access instruction (root of taint)
+    bool isAccess() const { return staticInst->isLoad(); }
+    // Instruction is a transmit instruction (has to be made invisible)
+    bool isMemTransmit() const { return staticInst->isLoad() || staticInst->isStore(); }
+    bool isOtherTransmit() const {
+        if (cpu->moreTransmitInsts == 1) {
+            if (opClass() == IntDivOp   ||
+                opClass() == FloatDivOp ||
+                opClass() == FloatSqrtOp)
+            return true;
+        }
+        else if (cpu->moreTransmitInsts == 2) {
+            if (opClass() == IntDivOp ||
+                isFloating())
+                return true;
+        }
+        return false;
+    }
+
     bool isSquashAfter() const { return staticInst->isSquashAfter(); }
     bool isFullMemBarrier()   const { return staticInst->isFullMemBarrier(); }
     bool isReadBarrier() const { return staticInst->isReadBarrier(); }
@@ -735,6 +822,18 @@ class DynInst : public ExecContext, public RefCounted
     /** Returns whether or not this instruction is completed. */
     bool isCompleted() const { return status[Completed]; }
 
+    void setPrevInstsCompleted() { status.set(PrevInstsCompleted); }
+    bool isPrevInstsCompleted() const { return status[PrevInstsCompleted]; }
+
+    void setPrevBrsResolved() { status.set(PrevBrsResolved); }
+    bool isPrevBrsResolved() const { return status[PrevBrsResolved]; }
+
+    void setPrevInstsCommitted() { status.set(PrevInstsCommitted); }
+    bool isPrevInstsCommitted() const { return status[PrevInstsCommitted]; }
+
+    void setPrevBrsCommitted() { status.set(PrevBrsCommitted); }
+    bool isPrevBrsCommitted() const { return status[PrevBrsCommitted]; }
+
     /** Marks the result as ready. */
     void setResultReady() { status.set(ResultReady); }
 
@@ -747,8 +846,17 @@ class DynInst : public ExecContext, public RefCounted
     /** Returns whether or not this instruction is ready to issue. */
     bool readyToIssue() const { return status[CanIssue]; }
 
+    /*** [Jiyong,DDIFT] for measuring more transmit instruction types ***/
+    bool readyToIssue_UT() const;
+
     /** Clears this instruction being able to issue. */
     void clearCanIssue() { status.reset(CanIssue); }
+
+    void addToStallList() { status.set(InStallList); }
+
+    void removeFromStallList() { status.reset(InStallList); }
+
+    bool isInStallList() const { return status[InStallList]; }
 
     /** Sets this instruction as issued from the IQ. */
     void setIssued() { status.set(Issued); }
@@ -772,7 +880,13 @@ class DynInst : public ExecContext, public RefCounted
     void clearCanCommit() { status.reset(CanCommit); }
 
     /** Returns whether or not this instruction is ready to commit. */
-    bool readyToCommit() const { return status[CanCommit]; }
+    /***** [Jiyong,DDIFT] add hasPendingSquash here ******/
+    bool readyToCommit() const {
+        return  status[CanCommit] &&
+                (!instFlags[HasPendingSquash] ||
+                 (instFlags[HasPendingSquash] && status[Squashed])
+                ); }
+    bool checkCanCommit() const { return status[CanCommit]; }
 
     void setAtCommit() { status.set(AtCommit); }
 
