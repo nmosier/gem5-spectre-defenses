@@ -1722,8 +1722,7 @@ InstructionQueue::propagateUntaint(ThreadID tid)
                     // If an ADD or SUB has an untainted dest and all but one src is untainted, then
                     // the remaining src can be untainted
                     // NOTE: This doesn't apply if the destination is the zero reg
-                    if (!(inst->renamedDestIdx(0)->is(IntRegClass) &&
-                          inst->renamedDestIdx(0)->index() == cpu->zeroRegIdx) &&
+                    if (!inst->renamedDestIdx(0)->is(InvalidRegClass) && 
                         !inst->isNonCCDestTainted() &&
                         inst->numTaintedSrcRegs() == 1)
                     {
