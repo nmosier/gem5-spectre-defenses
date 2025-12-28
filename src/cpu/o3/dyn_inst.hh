@@ -210,6 +210,8 @@ class DynInst : public ExecContext, public RefCounted
         HasPendingSquash,   // for branch/load, if a squash is postponed due to the tainted dependent operands
         FullyUntainted,
         OtherTransmit,
+        InvertibleOpcode,
+        InvertibleMove,
         MaxFlags
     };
 
@@ -453,6 +455,9 @@ class DynInst : public ExecContext, public RefCounted
 
     void setFullyUntainted() { instFlags[FullyUntainted] = true; }
     bool fullyUntainted() const { return instFlags[FullyUntainted]; }
+
+    bool invertibleOpcode() const { return instFlags[InvertibleOpcode]; }
+    bool invertibleMove() const { return instFlags[InvertibleMove]; }
 
     std::pair<uint8_t, uint8_t> getDestRegSizeAndOffs(int i) const;
     std::pair<uint8_t, uint8_t> getSrcRegSizeAndOffs(int i) const;

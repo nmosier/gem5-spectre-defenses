@@ -122,7 +122,16 @@ DynInst::DynInst(const Arrays &arrays, const StaticInstPtr &static_inst,
 
       default:
         panic("bad moreTransmitInsts value\n");
-    }                
+    }
+
+    // Compute if it's invertible.
+    const char* opcodes = "add,addi,adc,adci,sub,subi,sbb,sbbi";
+    const std::string name = staticInst->getName();
+    if (strstr(opcodes, name.c_str()))
+        instFlags[InvertibleOpcode] = true;
+
+    if (name == "mov")
+        instFlags[InvertibleMove] = true;
 }
 
 DynInst::DynInst(const Arrays &arrays, const StaticInstPtr &static_inst,

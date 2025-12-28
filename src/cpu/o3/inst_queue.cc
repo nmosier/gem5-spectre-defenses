@@ -1680,6 +1680,13 @@ InstructionQueue::propagateUntaint(ThreadID tid)
                 inst->setFullyUntainted();
                 continue;
             }
+
+            // Nothing to do.
+            if (destTainted && argsTainted && !inst->invertibleOpcode() &&
+                !inst->invertibleMove()) {
+                continue;
+            }
+
             BitVec& destTaintBcastMask = inst->destTaintBcastMask;
             BitVec& argsTaintBcastMask = inst->argsTaintBcastMask;
 
@@ -1711,12 +1718,7 @@ InstructionQueue::propagateUntaint(ThreadID tid)
 
             // Backward untaint propogation
             if (cpu->bwdUntaint) {
-                std::string instName = inst->staticInst->getName();
-                std::vector<std::pair<RegId, PhysRegIdPtr>> bwdUntaintedRegs; // Used for logging purposes
-                const char* opcodes = "add,addi,adc,adci,sub,subi,sbb,sbbi";
-
-                if (strstr(opcodes, instName.c_str()) != nullptr)
-                {
+                if (inst->invertibleOpcode()) {
                     // If an ADD or SUB has an untainted dest and all but one src is untainted, then
                     // the remaining src can be untainted
                     // NOTE: This doesn't apply if the destination is the zero reg
@@ -1729,17 +1731,15 @@ InstructionQueue::propagateUntaint(ThreadID tid)
                             if (inst->isArgsIdxTainted(i) &&
                                 !bits(argsTaintBcastMask, i)) {
                                 replaceBits(argsTaintBcastMask, i, 1);
-                                bwdUntaintedRegs.push_back({inst->srcRegIdx(i), inst->renamedSrcIdx(i)});
                                 break;
                             }
                         }
                     }
                 }
-                else if (instName == "mov") {
+                else if (inst->invertibleMove()) {
                     // If a MOV has an untainted dest then src 2 can be untainted as well
                     if (!destTainted && inst->isArgsIdxTainted(1) &&
                         !bits(argsTaintBcastMask, 1)) {
-                        bwdUntaintedRegs.push_back({inst->srcRegIdx(1), inst->renamedSrcIdx(1)});
                         replaceBits(argsTaintBcastMask, 1, 1);
                     }
                 }
