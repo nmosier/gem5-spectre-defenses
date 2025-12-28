@@ -1267,10 +1267,7 @@ Commit::commitHead(const DynInstPtr &head_inst, unsigned inst_num)
         auto& sqEntryTaintVec = head_inst->sqIt->dataTaintVec;
         auto srcRegTaintVec = cpu->readTaintVec(head_inst->renamedSrcIdx(2));
         assert(srcRegTaintVec != nullptr);
-        assert(sqEntryTaintVec.size() >= srcRegTaintVec->size());
-        for (int i = 0; i < sqEntryTaintVec.size(); i++) {
-            sqEntryTaintVec.at(i) = i < srcRegTaintVec->size() ? srcRegTaintVec->at(i) : false;
-        }
+        sqEntryTaintVec = *srcRegTaintVec;
     }
 
     // Update the commit rename map

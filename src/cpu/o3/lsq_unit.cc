@@ -171,10 +171,10 @@ LSQUnit::completeDataAccess(PacketPtr pkt)
             auto storeAddr = pkt->getAddr();
             auto storeSize = pkt->getSize();
             auto storeOffs = inst->getSrcRegSizeAndOffs(2).second;
-            assert(storeOffs + storeSize <= taintVec.size());
+            assert(storeOffs + storeSize <= BitVecBits);
             for (int i = 0; i < storeSize; i++) {
                 Addr a = storeAddr + i;
-                cpu->shadowL1[a] = taintVec.at(i + storeOffs);
+                cpu->shadowL1[a] = bits(taintVec, i + storeOffs);
             }
         }
     };
@@ -214,7 +214,7 @@ LSQUnit::completeDataAccess(PacketPtr pkt)
             auto loadDestOffs = inst->getDestRegSizeAndOffs(0).second;
             const BitVec* ldDestTaintVec = inst->destIdxTaintVec(0);
             assert(ldDestTaintVec != nullptr);
-            assert(loadDestOffs + loadSize <= ldDestTaintVec->size());
+            assert(loadDestOffs + loadSize <= BitVecBits);
             BitVec newTaintVec(*ldDestTaintVec);
 
             bool shadowL1DataTainted = false;
@@ -227,9 +227,10 @@ LSQUnit::completeDataAccess(PacketPtr pkt)
                     anyMisses = true;
                 }
                 shadowL1DataTainted |= cpu->shadowL1[a];
-                bool newTaint = cpu->shadowL1[a] && ldDestTaintVec->at(i + loadDestOffs);
+                bool newTaint = cpu->shadowL1[a] &&
+                    bits(*ldDestTaintVec, i + loadDestOffs);
                 cpu->shadowL1[a] = newTaint;
-                newTaintVec.at(i + loadDestOffs) = newTaint;
+                replaceBits(newTaintVec, i + loadDestOffs, newTaint);
             }
 
             if (anyMisses) {
@@ -1571,19 +1572,21 @@ LSQUnit::read(LSQRequest *request, ssize_t load_idx)
                 const BitVec* stSrcTaintVec = forwardingStore->argsIdxTaintVec(2);
                 assert(stSrcTaintVec != nullptr);
                 auto stSrcOffs = forwardingStore->getSrcRegSizeAndOffs(2).second;
-                assert(stSrcOffs + size + shift_amt <= stSrcTaintVec->size());
+                assert(size > 0 && stSrcOffs + size + shift_amt <= BitVecBits);
                 BitVec newStSrcTaintVec(*stSrcTaintVec);
 
                 const BitVec* ldDestTaintVec = load_inst->destIdxTaintVec(0);
                 assert(ldDestTaintVec != nullptr);
                 auto ldDestOffs = load_inst->getDestRegSizeAndOffs(0).second;
-                assert(ldDestOffs + size <= ldDestTaintVec->size());
+                assert(ldDestOffs + size <= BitVecBits);
                 BitVec newLdDestTaintVec(*ldDestTaintVec);
 
                 for (int i = 0; i < size; i++) {
-                    bool newTaint = ldDestTaintVec->at(i + ldDestOffs) && stSrcTaintVec->at(i + stSrcOffs + shift_amt);
-                    newStSrcTaintVec.at(i + stSrcOffs + shift_amt) = newTaint;
-                    newLdDestTaintVec.at(i + ldDestOffs) = newTaint;
+                    bool newTaint =
+                        bits(*ldDestTaintVec, i + ldDestOffs) &&
+                        bits(*stSrcTaintVec, i + stSrcOffs + shift_amt);
+                    replaceBits(newStSrcTaintVec, i + stSrcOffs + shift_amt, newTaint);
+                    replaceBits(newLdDestTaintVec, i + ldDestOffs, newTaint);
                 }
 
                 bool loadDestOldTaint = load_inst->isDestIdxTainted(0);
@@ -1868,19 +1871,21 @@ LSQUnit::propagateUntaint()
             const BitVec* stSrcTaintVec = storeInst->argsIdxTaintVec(2);
             assert(stSrcTaintVec != nullptr);
             auto stSrcOffs = storeInst->getSrcRegSizeAndOffs(2).second;
-            assert(stSrcOffs + size + shiftAmt <= stSrcTaintVec->size());
+            assert(stSrcOffs + size + shiftAmt <= BitVecBits);
             BitVec newStSrcTaintVec(*stSrcTaintVec);
 
             const BitVec* ldDestTaintVec = loadInst->destIdxTaintVec(0);
             assert(ldDestTaintVec != nullptr);
             auto ldDestOffs = loadInst->getDestRegSizeAndOffs(0).second;
-            assert(ldDestOffs + size <= ldDestTaintVec->size());
+            assert(ldDestOffs + size <= BitVecBits);
             BitVec newLdDestTaintVec(*ldDestTaintVec);
 
             for (int i = 0; i < size; i++) {
-                bool newTaint = ldDestTaintVec->at(i + ldDestOffs) && stSrcTaintVec->at(i + shiftAmt + stSrcOffs);
-                newStSrcTaintVec.at(i + shiftAmt + stSrcOffs) = newTaint;
-                newLdDestTaintVec.at(i + ldDestOffs) = newTaint;
+                bool newTaint =
+                    bits(*ldDestTaintVec, i + ldDestOffs) &&
+                    bits(*stSrcTaintVec, i + shiftAmt + stSrcOffs);
+                replaceBits(newStSrcTaintVec, i + shiftAmt + stSrcOffs, newTaint);
+                replaceBits(newLdDestTaintVec, i + ldDestOffs, newTaint);
             }
 
             bool loadDestOldTaint = loadInst->isDestIdxTainted(0);

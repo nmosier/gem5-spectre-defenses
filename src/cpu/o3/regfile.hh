@@ -251,32 +251,6 @@ class PhysRegFile
         }
     }
 
-    /** Rutvik, SPT: Creates new empty BitVec of appropriate size */
-    static size_t
-    taintVecSize(RegClass regClass)
-    {
-        return sizeof(RegVal);
-    }
-
-    static unsigned int
-    taintVecAsInt(const BitVec& taintVec)
-    {
-        unsigned int x = 0;
-        std::for_each(taintVec.rbegin(), taintVec.rend(), [&](bool b){ x = (x << 1) | b; });
-        return x;
-    }
-
-    static unsigned int
-    partialTaintVecAsInt(const BitVec& taintVec, uint8_t size, uint8_t offs)
-    {
-        unsigned int x = 0;
-        assert(size + offs < taintVec.size());
-        auto roffs = taintVec.size() - (size + offs);
-        std::for_each(taintVec.rbegin() + roffs, taintVec.rend() + roffs + size, [&](bool b){ x = (x << 1) | b; });
-        return x;
-    }
-
-    /** Rutvik, SPT: Reads taint */
     const BitVec *
     readTaint(PhysRegIdPtr phys_reg)
     {
@@ -287,51 +261,10 @@ class PhysRegFile
         return &taintFile->at(phys_reg->index());
     }
 
-    /** Rutvik, SPT: Sets taint */
-    void
-    setTaint(PhysRegIdPtr phys_reg, bool taint)
-    {
-        VecOfBitVec *taintFile = getTaintFile(phys_reg->classValue());
-        if (!taintFile)
-            return;
-        auto& bitVec = taintFile->at(phys_reg->index());
-        if (phys_reg->is(InvalidRegClass))
-            taint = false;
-        for (int i = 0; i < bitVec.size(); i++) {
-            bitVec.at(i) = taint;
-        }
-    }
-
-    /** Rutvik, SPT: Sets taint */
-    void
-    setPartialTaint(PhysRegIdPtr phys_reg, bool taint, uint8_t size, uint8_t offset = 0)
-    {
-        VecOfBitVec *taintFile = getTaintFile(phys_reg->classValue());
-        if (!taintFile)
-            return;
-        auto& bitVec = taintFile->at(phys_reg->index());
-        assert(size + offset <= bitVec.size());
-        if (phys_reg->is(InvalidRegClass))
-            taint = false;
-        for (int i = 0; i < size; i++) {
-            bitVec.at(i + offset) = taint;
-        }
-    }
-
-    /** Rutvik, SPT: Sets taint */
-    void
-    setPartialTaintVec(PhysRegIdPtr phys_reg, const BitVec& taintVec, uint8_t size, uint8_t offset = 0)
-    {
-        VecOfBitVec* taintFile = getTaintFile(phys_reg->classValue());
-        if (!taintFile) return;
-        auto& bitVec = taintFile->at(phys_reg->index());
-        assert(taintVec.size() == bitVec.size());
-        assert(size + offset <= bitVec.size());
-        for (int i = 0; i < size; i++) {
-            bitVec.at(i + offset) = phys_reg->is(InvalidRegClass) ?
-                false : taintVec.at(i + offset);
-        }
-    }
+    void setTaint(PhysRegIdPtr phys_reg, bool taint);
+    void setPartialTaint(PhysRegIdPtr phys_reg, bool taint,
+                         uint8_t size, uint8_t offset = 0);
+    void setPartialTaintVec(PhysRegIdPtr phys_reg, const BitVec& taintVec, uint8_t size, uint8_t offset = 0);
 
     /** Rutvik, SPT: Get the reason for why a register was untainted */
     UntaintMethod

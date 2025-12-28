@@ -94,8 +94,35 @@ DynInst::DynInst(const Arrays &arrays, const StaticInstPtr &static_inst,
     cpu->snList.insert(seqNum);
 #endif
 
-    destTaintBcastMask = BitVec(numDestRegs(), false);
-    argsTaintBcastMask = BitVec(numSrcRegs(), false);
+    destTaintBcastMask = 0;
+    argsTaintBcastMask = 0;
+
+    // Compute if it's an other transmitter.
+    const auto op_class = opClass();
+    switch (cpu->moreTransmitInsts) {
+      case 0:
+        break;
+
+      case 1:
+        switch (op_class) {
+          case IntDivOp:
+          case FloatDivOp:
+          case FloatSqrtOp:
+            instFlags[OtherTransmit] = true;
+            break;
+          default:
+            break;
+        }
+        break;
+
+      case 2:
+        if (op_class == IntDivOp || isFloating())
+            instFlags[OtherTransmit] = true;
+        break;
+
+      default:
+        panic("bad moreTransmitInsts value\n");
+    }                
 }
 
 DynInst::DynInst(const Arrays &arrays, const StaticInstPtr &static_inst,
@@ -625,8 +652,10 @@ DynInst::isArgsIdxTaintedImpl(int i) const
 
     if (isStore() && isCommitted() && i == 2) {
         const BitVec& bitVec = sqIt->dataTaintVec;
-        assert(offs + size <= bitVec.size());
-        return std::any_of(bitVec.begin() + offs, bitVec.begin() + offs + size, [](bool b){ return b; });
+        auto first = offs + size - 1;
+        auto last = offs;
+        assert(size > 0 && first < BitVecBits);
+        return bits(bitVec, first, last) != 0;
     }
 
     return cpu->readPartialTaint(renamedSrcIdx(i), size, offs);
@@ -668,10 +697,10 @@ DynInst::setArgsIdxTaint(int i, bool taint)
 
     if (isStore() && i == 2) {
         BitVec& bitVec = sqIt->dataTaintVec;
-        assert(size + offs <= bitVec.size());
-        for (int i = 0; i < size; i++) {
-            bitVec.at(i + offs) = taint;
-        }
+        auto first = size + offs - 1;
+        auto last = offs;
+        assert(size > 0 && first < BitVecBits);
+        replaceBits(bitVec, first, last, sext<1>(taint));
     }
 
     if (!isCommitted()) {
@@ -686,23 +715,17 @@ DynInst::setArgsIdxTaintVec(int i, const BitVec& taintVec)
     auto size = szAndOffs.first;
     auto offs = szAndOffs.second;
 
-    bool uncondUntaint = false;
-
     if (isStore() && i == 2) {
         BitVec& bitVec = sqIt->dataTaintVec;
-        assert(size + offs <= bitVec.size());
-        for (int i = 0; i < size; i++) {
-            bitVec.at(i + offs) = uncondUntaint ? false : taintVec.at(i + offs);
-        }
+        auto first = size + offs - 1;
+        auto last = offs;
+        assert(size > 0 && first < BitVecBits);
+        replaceBits(bitVec, first, last,
+                    bits(taintVec, first, last));
     }
 
     if (!isCommitted()) {
-        if (uncondUntaint) {
-            cpu->setPartialTaint(renamedSrcIdx(i), false, size, offs);
-        }
-        else {
-            cpu->setPartialTaintVec(renamedSrcIdx(i), taintVec, size, offs);
-        }
+        cpu->setPartialTaintVec(renamedSrcIdx(i), taintVec, size, offs);
     }
 }
 

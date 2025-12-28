@@ -209,6 +209,7 @@ class DynInst : public ExecContext, public RefCounted
         IsArgsTainted,
         HasPendingSquash,   // for branch/load, if a squash is postponed due to the tainted dependent operands
         FullyUntainted,
+        OtherTransmit,
         MaxFlags
     };
 
@@ -652,19 +653,11 @@ class DynInst : public ExecContext, public RefCounted
     bool isAccess() const { return staticInst->isLoad(); }
     // Instruction is a transmit instruction (has to be made invisible)
     bool isMemTransmit() const { return staticInst->isLoad() || staticInst->isStore(); }
-    bool isOtherTransmit() const {
-        if (cpu->moreTransmitInsts == 1) {
-            if (opClass() == IntDivOp   ||
-                opClass() == FloatDivOp ||
-                opClass() == FloatSqrtOp)
-            return true;
-        }
-        else if (cpu->moreTransmitInsts == 2) {
-            if (opClass() == IntDivOp ||
-                isFloating())
-                return true;
-        }
-        return false;
+
+    bool
+    isOtherTransmit() const
+    {
+        return instFlags[OtherTransmit];
     }
 
     bool isSquashAfter() const { return staticInst->isSquashAfter(); }

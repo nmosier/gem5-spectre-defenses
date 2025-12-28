@@ -93,7 +93,7 @@ PhysRegFile::PhysRegFile(unsigned _numPhysicalIntRegs,
     for (phys_reg = 0; phys_reg < numPhysicalIntRegs; phys_reg++) {
         intRegIds.emplace_back(*reg_classes.at(IntRegClass),
                 phys_reg, flat_reg_idx++);
-        intRegTaintFile.emplace_back(sizeof(RegVal), false);
+        intRegTaintFile.emplace_back(0);
         intRegUntaintMethods.push_back(UntaintMethod::NoUntaint);
     }
 
@@ -102,7 +102,7 @@ PhysRegFile::PhysRegFile(unsigned _numPhysicalIntRegs,
     for (phys_reg = 0; phys_reg < numPhysicalFloatRegs; phys_reg++) {
         floatRegIds.emplace_back(*reg_classes.at(FloatRegClass),
                 phys_reg, flat_reg_idx++);
-        floatRegTaintFile.emplace_back(sizeof(RegVal), false);
+        floatRegTaintFile.emplace_back(0);
         floatRegUntaintMethods.push_back(UntaintMethod::NoUntaint);
     }
 
@@ -111,7 +111,7 @@ PhysRegFile::PhysRegFile(unsigned _numPhysicalIntRegs,
     for (phys_reg = 0; phys_reg < numPhysicalVecRegs; phys_reg++) {
         vecRegIds.emplace_back(*reg_classes.at(VecRegClass), phys_reg,
                 flat_reg_idx++);
-        vectorRegTaintFile.push_back(BitVec(sizeof(RegVal), false));
+        vectorRegTaintFile.push_back(0);
         vectorRegUntaintMethods.push_back(UntaintMethod::NoUntaint);
     }
     // The next batch of the registers are the vector element physical
@@ -140,7 +140,7 @@ PhysRegFile::PhysRegFile(unsigned _numPhysicalIntRegs,
     for (phys_reg = 0; phys_reg < numPhysicalCCRegs; phys_reg++) {
         ccRegIds.emplace_back(*reg_classes.at(CCRegClass), phys_reg,
                 flat_reg_idx++);
-        ccRegTaintFile.emplace_back(sizeof(RegVal), false);
+        ccRegTaintFile.emplace_back(0);
         ccRegUntaintMethods.push_back(UntaintMethod::NoUntaint);
     }
 
@@ -202,6 +202,49 @@ PhysRegFile::initFreeList(UnifiedFreeList *freeList)
         assert(ccRegIds[reg_idx].index() == reg_idx);
     }
     freeList->addRegs(ccRegIds.begin(), ccRegIds.end());
+}
+
+void
+PhysRegFile::setTaint(PhysRegIdPtr phys_reg, bool taint)
+{
+    VecOfBitVec *taintFile = getTaintFile(phys_reg->classValue());
+    if (!taintFile)
+        return;
+    auto& bitVec = taintFile->at(phys_reg->index());
+    if (phys_reg->is(InvalidRegClass))
+        taint = false;
+    bitVec = sext<1>(taint);
+}
+
+void
+PhysRegFile::setPartialTaint(PhysRegIdPtr phys_reg, bool taint, uint8_t size, uint8_t offset)
+{
+    VecOfBitVec *taintFile = getTaintFile(phys_reg->classValue());
+    if (!taintFile || size == 0)
+        return;
+    auto& bitVec = taintFile->at(phys_reg->index());
+    auto first = offset + size - 1;
+    auto last = offset;
+    assert(size > 0 && first < BitVecBits);
+    if (phys_reg->is(InvalidRegClass))
+        taint = false;
+    replaceBits(bitVec, first, last, sext<1>(taint));
+}
+
+void
+PhysRegFile::setPartialTaintVec(PhysRegIdPtr phys_reg, const BitVec& taintVec,
+                                uint8_t size, uint8_t offset)
+{
+    VecOfBitVec* taintFile = getTaintFile(phys_reg->classValue());
+    if (!taintFile) return;
+    auto& bitVec = taintFile->at(phys_reg->index());
+    auto first = size + offset - 1;
+    auto last = offset;
+    assert(size > 0 && first < BitVecBits);
+    BitVec taint_vec_tmp = bits(taintVec, first, last);
+    if (phys_reg->is(InvalidRegClass))
+        taint_vec_tmp = 0;
+    replaceBits(bitVec, first, last, taint_vec_tmp);
 }
 
 } // namespace o3

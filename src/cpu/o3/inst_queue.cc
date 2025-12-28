@@ -1687,13 +1687,13 @@ InstructionQueue::propagateUntaint(ThreadID tid)
 
             for (int i = 0; i < inst->numDestRegs(); i++) {
                 if (!inst->isDestIdxTainted(i)) {
-                    destTaintBcastMask.at(i) = false;
+                    replaceBits(destTaintBcastMask, i, 0);
                 }
             }
 
             for (int i = 0; i < inst->numSrcRegs(); i++) {
                 if (!inst->isArgsIdxTainted(i)) {
-                    argsTaintBcastMask.at(i) = false;
+                    replaceBits(argsTaintBcastMask, i, 0);
                 }
             }
 
@@ -1702,8 +1702,8 @@ InstructionQueue::propagateUntaint(ThreadID tid)
             if (cpu->fwdUntaint) {
                 if (!inst->isMemTransmit() && !argsTainted && destTainted) {
                     for (int i = 0; i < inst->numDestRegs(); i++) {
-                        if (inst->isDestIdxTainted(i) && !destTaintBcastMask.at(i)) {
-                            destTaintBcastMask.at(i) = true;
+                        if (inst->isDestIdxTainted(i) && !bits(destTaintBcastMask, i)) {
+                            replaceBits(destTaintBcastMask, i, 1);
                         }
                     }
                 }
@@ -1726,8 +1726,9 @@ InstructionQueue::propagateUntaint(ThreadID tid)
                         inst->numTaintedSrcRegs() == 1)
                     {
                         for (int i = 0; i < inst->numSrcRegs(); i++) {
-                            if (inst->isArgsIdxTainted(i) && !argsTaintBcastMask.at(i)) {
-                                argsTaintBcastMask.at(i) = true;
+                            if (inst->isArgsIdxTainted(i) &&
+                                !bits(argsTaintBcastMask, i)) {
+                                replaceBits(argsTaintBcastMask, i, 1);
                                 bwdUntaintedRegs.push_back({inst->srcRegIdx(i), inst->renamedSrcIdx(i)});
                                 break;
                             }
@@ -1736,9 +1737,10 @@ InstructionQueue::propagateUntaint(ThreadID tid)
                 }
                 else if (instName == "mov") {
                     // If a MOV has an untainted dest then src 2 can be untainted as well
-                    if (!destTainted && inst->isArgsIdxTainted(1) && !argsTaintBcastMask.at(1)) {
+                    if (!destTainted && inst->isArgsIdxTainted(1) &&
+                        !bits(argsTaintBcastMask, 1)) {
                         bwdUntaintedRegs.push_back({inst->srcRegIdx(1), inst->renamedSrcIdx(1)});
-                        argsTaintBcastMask.at(1) = 1;
+                        replaceBits(argsTaintBcastMask, 1, 1);
                     }
                 }
             }
@@ -1746,10 +1748,10 @@ InstructionQueue::propagateUntaint(ThreadID tid)
             // Now that we've propagated the untaint, if the current instruction has any dest or src regs
             // that are waiting to be untainted, we add as many of them as we can to the queue
 
-            assert(inst->numDestRegs() <= destTaintBcastMask.size());
+            assert(inst->numDestRegs() <= BitVecBits);
             for (int i = 0; i < inst->numDestRegs(); i++) {
-                if (destTaintBcastMask.at(i) && untaintQueue.size() < queueLimit) {
-                    destTaintBcastMask.at(i) = false;
+                if (bits(destTaintBcastMask, i) && untaintQueue.size() < queueLimit) {
+                    replaceBits(destTaintBcastMask, i, 0);
                     auto szAndOffs = inst->getDestRegSizeAndOffs(i);
                     untaintQueue.push_back(
                         std::make_tuple(inst->renamedDestIdx(i), szAndOffs.first, szAndOffs.second,
@@ -1757,10 +1759,10 @@ InstructionQueue::propagateUntaint(ThreadID tid)
                 }
             }
 
-            assert(inst->numSrcRegs() <= argsTaintBcastMask.size());
+            assert(inst->numSrcRegs() <= BitVecBits);
             for (int i = 0; i < inst->numSrcRegs(); i++) {
-                if (argsTaintBcastMask.at(i) && untaintQueue.size() < queueLimit) {
-                    argsTaintBcastMask.at(i) = false;
+                if (bits(argsTaintBcastMask, i) && untaintQueue.size() < queueLimit) {
+                    replaceBits(argsTaintBcastMask, i, 0);
                     auto szAndOffs = inst->getSrcRegSizeAndOffs(i);
                     untaintQueue.push_back(
                         std::make_tuple(inst->renamedSrcIdx(i), szAndOffs.first, szAndOffs.second,

@@ -1534,14 +1534,6 @@ CPU::htmSendAbortSignal(ThreadID tid, uint64_t htm_uid,
         panic("HTM abort signal was not sent to the memory subsystem.");
     }
 }
-    
-/** [Rutvik, SPT] Read taint bit of a given register */
-bool
-CPU::readTaint(PhysRegIdPtr phys_reg) {
-    const BitVec* bitVec = regFile.readTaint(phys_reg);
-    if (!bitVec) return false;
-    return std::any_of(bitVec->begin(), bitVec->end(), [](bool b){ return b; });
-}
 
 /** [Rutvik, SPT] Read taint vec of a given register */
 const BitVec*
@@ -1552,10 +1544,13 @@ CPU::readTaintVec(PhysRegIdPtr phys_reg) {
 /** [Rutvik, SPT] Read taint bit of part of a given register */
 bool
 CPU::readPartialTaint(PhysRegIdPtr phys_reg, uint8_t size, uint8_t offset) {
-    const BitVec* bitVec = regFile.readTaint(phys_reg);
-    if (!bitVec) return false;
-    assert(size + offset <= bitVec->size());
-    return std::any_of(bitVec->begin() + offset, bitVec->begin() + offset + size, [](bool b){ return b; });
+    const BitVec *bitVec = regFile.readTaint(phys_reg);
+    if (!bitVec || size == 0)
+        return false;
+    auto first = size + offset - 1;
+    auto last = offset;
+    assert(size > 0 && first < BitVecBits);
+    return bits(*bitVec, first, last) != 0;
 }
 
 /** [Rutvik, SPT] Set taint bit of given register */

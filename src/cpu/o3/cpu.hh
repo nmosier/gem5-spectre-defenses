@@ -322,7 +322,6 @@ class CPU : public BaseCPU
     void setReg(PhysRegIdPtr phys_reg, const void *val, ThreadID tid);
 
     /** [Rutvik, SPT] Read/set taint bit of a given register */
-    bool readTaint(PhysRegIdPtr phys_reg);
     const BitVec* readTaintVec(PhysRegIdPtr phys_reg);
     bool readPartialTaint(PhysRegIdPtr phys_reg, uint8_t size, uint8_t offset = 0);
     void setTaint(PhysRegIdPtr phys_reg, bool taint);

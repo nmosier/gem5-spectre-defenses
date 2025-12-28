@@ -1,6 +1,10 @@
 #pragma once
 
 #include <vector>
+#include <cstdint>
+#include <cstddef>
+
+#include "base/bitfield.hh"
 
 namespace gem5
 {
@@ -19,7 +23,8 @@ enum class UntaintMethod {
     STLBwd,
 };
 
-typedef std::vector<bool> BitVec;
+typedef uint64_t BitVec;
+static constexpr std::size_t BitVecBits = sizeof(BitVec) * 8;
 typedef std::vector<BitVec> VecOfBitVec;
 typedef std::vector<UntaintMethod> UntaintMethodTable;
 

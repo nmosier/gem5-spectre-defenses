@@ -7,7 +7,7 @@ BEGIN { base = 0}
   if (base == 0) {
     base = $4;
   }
-  printf "%.2f\n", $4 / base;
+  printf "%.4f\n", $4 / base;
 }' "$@"
 }
 

@@ -172,7 +172,7 @@ class LSQUnit
         BitVec dataTaintVec;
         /** Constructs an empty store queue entry. */
         SQEntry()
-            : dataTaintVec(DataSize, false)
+            : dataTaintVec(0)
         {
             std::memset(_data, 0, DataSize);
         }
