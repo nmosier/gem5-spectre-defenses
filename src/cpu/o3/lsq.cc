@@ -340,6 +340,14 @@ void
 LSQ::squash(const InstSeqNum &squashed_num, ThreadID tid)
 { thread.at(tid)->squash(squashed_num); }
 
+// [mengjia]
+void
+LSQ::updateVisibleState()
+{
+    for (ThreadID tid : *activeThreads)
+        thread[tid]->updateVisibleState();
+}
+
 bool
 LSQ::violation()
 {

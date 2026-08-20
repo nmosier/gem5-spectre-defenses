@@ -277,6 +277,9 @@ class LSQUnit
     /** Writes back stores. */
     void writebackStores();
 
+    /** [STT] Update Visbible State. */
+    void updateVisibleState();
+
     /** Completes the data access that has been returned from the
      * memory system. */
     void completeDataAccess(PacketPtr pkt);
@@ -529,6 +532,9 @@ class LSQUnit
 
         /** Total number of loads forwaded from LSQ stores. */
         statistics::Scalar forwLoads;
+
+        /** Total number of loads forwaded from LSQ stores. */
+        statistics::Scalar taintedForwLoads;
 
         /** Total number of squashed loads. */
         statistics::Scalar squashedLoads;

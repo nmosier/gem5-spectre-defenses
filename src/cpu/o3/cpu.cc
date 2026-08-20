@@ -253,8 +253,9 @@ CPU::CPU(const BaseO3CPUParams &params)
                 // Note that we can't use the rename() method because we don't
                 // want special treatment for the zero register at this point
                 PhysRegIdPtr phys_reg = freeList.getReg(type);
-                renameMap[tid].setEntry(id, phys_reg);
-                commitRenameMap[tid].setEntry(id, phys_reg);
+		const RenameEntry rename_entry(phys_reg, NoYRoT);
+                renameMap[tid].setEntry(id, rename_entry);
+                commitRenameMap[tid].setEntry(id, rename_entry);
             }
         }
     }
@@ -320,6 +321,25 @@ CPU::CPU(const BaseO3CPUParams &params)
         fatal("O3CPU %s has no interrupt controller.\n"
               "Ensure createInterruptController() is called.\n", name());
     }
+
+    const std::string threatModel = params.threatModel;
+    if (threatModel == "UnsafeBaseline" || threatModel == "Spectre") {
+        isFuturistic = false;
+    } else if (threatModel == "Futuristic") {
+        isFuturistic = true;
+    } else {
+        panic("unsupported threat model '%s'\n", threatModel);
+    }
+    cprintf("Info: simulation uses threatModel: %s\n", threatModel);
+
+    /*** [Jiyong, STT] ***/
+    STT = params.STT;
+    impChannel = params.implicitChannel;
+    cprintf("applySTT = %d, implicit_channel = %d\n",
+            STT, impChannel);
+
+    if (impChannel)
+        assert(STT);
 }
 
 void
@@ -619,7 +639,7 @@ CPU::insertThread(ThreadID tid)
             type = (RegClassType)(type + 1)) {
         for (auto &id: *regClasses.at(type)) {
             PhysRegIdPtr phys_reg = freeList.getReg(type);
-            renameMap[tid].setEntry(id, phys_reg);
+            renameMap[tid].setEntry(id, RenameEntry(phys_reg, NoYRoT));
             scoreboard.setReg(phys_reg);
         }
     }
@@ -1089,7 +1109,7 @@ RegVal
 CPU::getArchReg(const RegId &reg, ThreadID tid)
 {
     const RegId flat = reg.flatten(*isa[tid]);
-    PhysRegIdPtr phys_reg = commitRenameMap[tid].lookup(flat);
+    PhysRegIdPtr phys_reg = commitRenameMap[tid].lookup(flat).physReg;
     return regFile.getReg(phys_reg);
 }
 
@@ -1097,7 +1117,7 @@ void
 CPU::getArchReg(const RegId &reg, void *val, ThreadID tid)
 {
     const RegId flat = reg.flatten(*isa[tid]);
-    PhysRegIdPtr phys_reg = commitRenameMap[tid].lookup(flat);
+    PhysRegIdPtr phys_reg = commitRenameMap[tid].lookup(flat).physReg;
     regFile.getReg(phys_reg, val);
 }
 
@@ -1105,7 +1125,7 @@ void *
 CPU::getWritableArchReg(const RegId &reg, ThreadID tid)
 {
     const RegId flat = reg.flatten(*isa[tid]);
-    PhysRegIdPtr phys_reg = commitRenameMap[tid].lookup(flat);
+    PhysRegIdPtr phys_reg = commitRenameMap[tid].lookup(flat).physReg;
     return regFile.getWritableReg(phys_reg);
 }
 
@@ -1113,7 +1133,7 @@ void
 CPU::setArchReg(const RegId &reg, RegVal val, ThreadID tid)
 {
     const RegId flat = reg.flatten(*isa[tid]);
-    PhysRegIdPtr phys_reg = commitRenameMap[tid].lookup(flat);
+    PhysRegIdPtr phys_reg = commitRenameMap[tid].lookup(flat).physReg;
     regFile.setReg(phys_reg, val);
 }
 
@@ -1121,7 +1141,7 @@ void
 CPU::setArchReg(const RegId &reg, const void *val, ThreadID tid)
 {
     const RegId flat = reg.flatten(*isa[tid]);
-    PhysRegIdPtr phys_reg = commitRenameMap[tid].lookup(flat);
+    PhysRegIdPtr phys_reg = commitRenameMap[tid].lookup(flat).physReg;
     regFile.setReg(phys_reg, val);
 }
 

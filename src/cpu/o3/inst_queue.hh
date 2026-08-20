@@ -338,6 +338,10 @@ class InstructionQueue
     /** Wakes all dependents waiting on a destination register. */
     int wakeDependents(PhysRegIdPtr dest_reg);
 
+    /** [Jiyong, STT] do a scan of instList and wake readyToIssue insts **/
+    /** Used because wakeDependents cannot set readyToIssue if argsTainted **/
+    void wakeUntaintInsts();
+
     /** Adds a ready memory instruction to the ready list. */
     void addReadyMemInst(const DynInstPtr &ready_inst);
 
@@ -400,6 +404,9 @@ class InstructionQueue
     /** List of Instruction Queues */
     std::vector<IQUnit *> iqs;
 
+    /** List of active thread ids. */
+    std::list<ThreadID> *activeThreads;
+
     /** Insertion policy for routing instructions to IQs */
     IQInsertionPolicy insertionPolicy;
 
@@ -425,6 +432,9 @@ class InstructionQueue
 
     /** List of all the instructions in the IQ (some of which may be issued). */
     std::list<DynInstPtr> instList[MaxThreads];
+
+    /*** [Jiyong,STT] List of all stalled tainted ready instructions ***/
+    std::list<DynInstPtr> stalledTaintedInstList[MaxThreads];
 
     /** List of instructions that are ready to be executed. */
     std::list<DynInstPtr> instsToExecute;

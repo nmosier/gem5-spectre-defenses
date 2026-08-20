@@ -46,6 +46,7 @@
 #include <list>
 #include <queue>
 #include <string>
+#include <array>
 
 #include "base/refcnt.hh"
 #include "base/trace.hh"
@@ -55,6 +56,7 @@
 #include "cpu/inst_seq.hh"
 #include "cpu/o3/dyn_inst_ptr.hh"
 #include "cpu/o3/lsq_unit.hh"
+#include "cpu/o3/rename_map.hh"
 #include "cpu/op_class.hh"
 #include "cpu/reg_class.hh"
 #include "cpu/static_inst.hh"
@@ -177,6 +179,16 @@ class DynInst : public ExecContext, public RefCounted
                                  /// instructions ahead of it
         SerializeAfter,          /// Needs to serialize instructions behind it
         SerializeHandled,        /// Serialization has been handled
+
+        // indicates whether expose finishes
+        // (should set when expose is sent out)
+        PrevInstsCompleted, // all prev instrs are completed
+        // indicate whether previous instructions completed
+        PrevBrsResolved, // all prev branches are completed
+        // [mengjia] indicate whether previous branches are resolved
+        PrevInstsCommitted,
+        /*** [Jiyong,STT] ***/
+        InStallList,    // instruction is ready to issue(regsReady) but argsTainted
         NumStatus
     };
 
@@ -198,6 +210,9 @@ class DynInst : public ExecContext, public RefCounted
         HtmFromTransaction,
         NoCapableFU,           /// Processor does not have capability to
                                /// execute the instruction
+        // [Jiyong,STT] The following are STT flags
+        IsUnsquashable,     // a instr is not squashable.
+        HasPendingSquash,   // for branch/load, if a squash is postponed due to the tainted dependent operands
         MaxFlags
     };
 
@@ -277,9 +292,9 @@ class DynInst : public ExecContext, public RefCounted
 
     // Set the renamed dest register id.
     void
-    renamedDestIdx(int idx, PhysRegIdPtr phys_reg_id)
+    renamedDestIdx(int idx, const RenameEntry &rename_entry)
     {
-        _destIdx[idx] = phys_reg_id;
+        _destIdx[idx] = rename_entry.physReg;
     }
 
     // Returns the physical register index of the previous physical
@@ -365,6 +380,11 @@ class DynInst : public ExecContext, public RefCounted
     ssize_t sqIdx = -1;
     SQIterator sqIt;
 
+    /** YRoTs for source, destination, and transmitted register operands. */
+    InstSeqNum yrotSrcs = InvalidYRoT;
+    InstSeqNum yrotDests = InvalidYRoT;
+    InstSeqNum yrotXmits = InvalidYRoT;
+
     /////////////////////// TLB Miss //////////////////////
     /**
      * Saved memory request (needed when the DTB address translation is
@@ -388,6 +408,15 @@ class DynInst : public ExecContext, public RefCounted
     bool memOpDone() const { return instFlags[MemOpDone]; }
     void memOpDone(bool f) { instFlags[MemOpDone] = f; }
 
+    /*** [Jiyong,STT] STT Flags setter and accessor ***/
+    bool isUnsquashable() const { return instFlags[IsUnsquashable]; }
+    void isUnsquashable(bool f) { instFlags[IsUnsquashable] = f; }
+
+    bool isXmitTainted() const;
+
+    bool hasPendingSquash() const { return instFlags[HasPendingSquash]; }
+    void hasPendingSquash(bool f) { instFlags[HasPendingSquash] = f; }
+  
     bool notAnInst() const { return instFlags[NotAnInst]; }
     void setNotAnInst() { instFlags[NotAnInst] = true; }
 
@@ -466,12 +495,12 @@ class DynInst : public ExecContext, public RefCounted
      *  the previous physical register that the logical register mapped to.
      */
     void
-    renameDestReg(int idx, PhysRegIdPtr renamed_dest,
-                  PhysRegIdPtr previous_rename)
+    renameDestReg(int idx, const RenameEntry &renamed_dest,
+                  const RenameEntry &previous_rename)
     {
         renamedDestIdx(idx, renamed_dest);
-        prevDestIdx(idx, previous_rename);
-        if (renamed_dest->isPinned())
+        prevDestIdx(idx, previous_rename.physReg);
+        if (renamed_dest.physReg->isPinned())
             setPinnedRegsRenamed();
     }
 
@@ -646,6 +675,10 @@ class DynInst : public ExecContext, public RefCounted
         }
     }
 
+    // [Jiyong,STT] The following are STT status
+    bool isAccess() const { return staticInst->isLoad(); }                /// Instruction is an access instruction(root of taint)
+    
+
     /** Temporarily sets this instruction as a serialize before instruction. */
     void setSerializeBefore() { status.set(SerializeBefore); }
 
@@ -743,6 +776,15 @@ class DynInst : public ExecContext, public RefCounted
     /** Returns whether or not this instruction is completed. */
     bool isCompleted() const { return status[Completed]; }
 
+    void setPrevInstsCompleted() { status.set(PrevInstsCompleted); }
+    bool isPrevInstsCompleted() const { return status[PrevInstsCompleted]; }
+
+    void setPrevBrsResolved() { status.set(PrevBrsResolved); }
+    bool isPrevBrsResolved() const { return status[PrevBrsResolved]; }
+
+    void setPrevInstsCommitted() { status.set(PrevInstsCommitted); }
+    bool isPrevInstsCommitted() const { return status[PrevInstsCommitted]; }
+    
     /** Marks the result as ready. */
     void setResultReady() { status.set(ResultReady); }
 
@@ -755,8 +797,17 @@ class DynInst : public ExecContext, public RefCounted
     /** Returns whether or not this instruction is ready to issue. */
     bool readyToIssue() const { return status[CanIssue]; }
 
+    /*** [Jiyong,STT] for measuring more transmit instruction types ***/
+    bool readyToIssue_UT() const;
+
     /** Clears this instruction being able to issue. */
     void clearCanIssue() { status.reset(CanIssue); }
+
+    void addToStallList() { status.set(InStallList); }
+
+    void removeFromStallList() { status.reset(InStallList); }
+
+    bool isInStallList() const { return status[InStallList]; }
 
     /** Sets this instruction as issued from the IQ. */
     void setIssued() { status.set(Issued); }
@@ -780,7 +831,13 @@ class DynInst : public ExecContext, public RefCounted
     void clearCanCommit() { status.reset(CanCommit); }
 
     /** Returns whether or not this instruction is ready to commit. */
-    bool readyToCommit() const { return status[CanCommit]; }
+    /***** [Jiyong,STT] add hasPendingSquash here ******/
+    bool readyToCommit() const {
+        return  status[CanCommit] &&
+                (!instFlags[HasPendingSquash] ||
+                 (instFlags[HasPendingSquash] && status[Squashed])
+                ); }
+    bool checkCanCommit() const { return status[CanCommit]; }
 
     void setAtCommit() { status.set(AtCommit); }
 

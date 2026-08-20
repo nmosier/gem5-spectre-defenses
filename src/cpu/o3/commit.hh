@@ -305,6 +305,9 @@ class Commit
     /** Returns the thread ID to use based on an oldest instruction policy. */
     ThreadID oldestReady();
 
+    /*** [Jiyong, STT] ***/
+    void handleSquashSignalFromROB(ThreadID tid, DynInstPtr &pendingMispInst);
+
   public:
     /** Reads the PC of a specific thread. */
     const PCStateBase &pcState(ThreadID tid) { return *pc[tid]; }
@@ -454,6 +457,8 @@ class Commit
         interrupts are enabled and pending the pipeline will squash to avoid
         a possible livelock senario.  */
     bool avoidQuiesceLiveLock;
+
+    int stalled_counter;
 
     /** Updates commit stats based on this instruction. */
     void updateComInstStats(const DynInstPtr &inst);

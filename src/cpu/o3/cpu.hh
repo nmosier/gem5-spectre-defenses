@@ -69,6 +69,7 @@
 #include "cpu/timebuf.hh"
 #include "params/BaseO3CPU.hh"
 #include "sim/process.hh"
+#include "cpu/stt.hh"
 
 namespace gem5
 {
@@ -615,6 +616,18 @@ class CPU : public BaseCPU
     // hardware transactional memory
     void htmSendAbortSignal(ThreadID tid, uint64_t htm_uid,
                             HtmFailureFaultCause cause) override;
+
+    // flag for whether defending against spectre attack or futuristic attacks
+    bool isFuturistic;
+
+    // whether to apply STT
+    bool STT;
+
+    // whether add implicit flow protection
+    bool impChannel;
+
+    // [STT++] The youngest nonspeculative instruction.
+    InstSeqNum untaintBroadcast = NoYRoT;
 };
 
 } // namespace o3

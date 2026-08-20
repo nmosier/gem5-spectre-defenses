@@ -267,6 +267,8 @@ LSQUnit::LSQUnitStats::LSQUnitStats(statistics::Group *parent)
     : statistics::Group(parent),
       ADD_STAT(forwLoads, statistics::units::Count::get(),
                "Number of loads that had data forwarded from stores"),
+      ADD_STAT(taintedForwLoads, "Number of tainted loads that had data "
+               "forwarded from stores"),      
       ADD_STAT(squashedLoads, statistics::units::Count::get(),
                "Number of loads squashed"),
       ADD_STAT(ignoredResponses, statistics::units::Count::get(),
@@ -1372,6 +1374,9 @@ LSQUnit::read(LSQRequest *request, ssize_t load_idx)
 
     assert(!load_inst->isExecuted());
 
+    // [STT++] Load addresses shouldn't be tainted here.
+    assert(!load_inst->isXmitTainted());
+
     // Make sure this isn't a strictly ordered load
     // A bit of a hackish way to get strictly ordered accesses to work
     // only if they're at the head of the LSQ and are ready to commit
@@ -1748,6 +1753,17 @@ SQEntry::clear()
 
 LSQUnit::LSQUnit(const LSQUnit &l) : stats(nullptr)
 { panic("LSQUnit is not copy-able"); }
+
+// [SafeSpec] update FenceDelay State
+/*** [Jiyong,STT] update logic for STT ***/
+void
+LSQUnit::updateVisibleState()
+{
+    //iterate all the loads and update its fencedelay state accordingly
+    for (const LQEntry &lq_entry : loadQueue)
+	if (!cpu->STT)
+	  lq_entry.instruction()->isUnsquashable(false);
+}
 
 } // namespace o3
 } // namespace gem5

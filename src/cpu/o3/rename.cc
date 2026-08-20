@@ -751,6 +751,16 @@ Rename::renameInsts(ThreadID tid)
 
         renameSrcRegs(inst, inst->threadNumber);
 
+	// [STT++] Compute YRoT of dest regs.
+        assert(yrotValid(inst->yrotSrcs) && yrotValid(inst->yrotXmits) &&
+               !yrotValid(inst->yrotDests));
+	if (inst->isAccess()) {
+            inst->yrotDests = inst->seqNum;
+	} else {
+            inst->yrotDests = inst->yrotSrcs;
+        }
+        assert(yrotValid(inst->yrotDests));
+
         renameDestRegs(inst, inst->threadNumber);
 
         if (inst->isAtomic() || inst->isStore()) {
@@ -952,7 +962,7 @@ Rename::doSquash(const InstSeqNum &squashed_seq_num, ThreadID tid)
         DPRINTF(Rename, "[tid:%i] Removing history entry with sequence "
                 "number %i (archReg: %d, newPhysReg: %d, prevPhysReg: %d).\n",
                 tid, hb_it->instSeqNum, hb_it->archReg.index(),
-                hb_it->newPhysReg->index(), hb_it->prevPhysReg->index());
+                hb_it->newEntry.physReg->index(), hb_it->prevEntry.physReg->index());
 
         // Undo the rename mapping only if it was really a change.
         // Special regs that are not really renamed (like misc regs
@@ -960,16 +970,16 @@ Rename::doSquash(const InstSeqNum &squashed_seq_num, ThreadID tid)
         // is the same as the old one.  While it would be merely a
         // waste of time to update the rename table, we definitely
         // don't want to put these on the free list.
-        if (hb_it->newPhysReg != hb_it->prevPhysReg) {
+        if (hb_it->newEntry != hb_it->prevEntry) {
             // Tell the rename map to set the architected register to the
             // previous physical register that it was renamed to.
-            renameMap[tid]->setEntry(hb_it->archReg, hb_it->prevPhysReg);
+            renameMap[tid]->setEntry(hb_it->archReg, hb_it->prevEntry);
 
             // The phys regs can still be owned by squashing but
             // executing instructions in IEW at this moment. To avoid
             // ownership hazard in SMT CPU, we delay the freelist update
             // until they are indeed squashed in the commit stage.
-            freeingInProgress[tid].push_back(hb_it->newPhysReg);
+            freeingInProgress[tid].push_back(hb_it->newEntry.physReg);
         }
 
         // mark the speculative register as ready in the scoreboard as
@@ -979,13 +989,13 @@ Rename::doSquash(const InstSeqNum &squashed_seq_num, ThreadID tid)
         // register (it will be marked as busy anyway next time it gets used).
         // This is instead required for fixed mapping registers which could
         // be rereferenced as a source registers after the squash
-        scoreboard->setReg(hb_it->newPhysReg);
+        scoreboard->setReg(hb_it->newEntry.physReg);
 
         // Notify potential listeners that the register mapping needs to be
         // removed because the instruction it was mapped to got squashed. Note
         // that this is done before hb_it is incremented.
         ppSquashInRename->notify(std::make_pair(hb_it->instSeqNum,
-                                                hb_it->newPhysReg));
+                                                hb_it->newEntry.physReg));
 
         historyBuffer[tid].erase(hb_it++);
 
@@ -1025,20 +1035,20 @@ Rename::removeFromHistory(InstSeqNum inst_seq_num, ThreadID tid)
 
         DPRINTF(Rename, "[tid:%i] Freeing up older rename of reg %i (%s), "
                 "[sn:%llu].\n",
-                tid, hb_it->prevPhysReg->index(),
-                hb_it->prevPhysReg->className(),
+                tid, hb_it->prevEntry.physReg->index(),
+                hb_it->prevEntry.physReg->className(),
                 hb_it->instSeqNum);
 
         // Don't free special phys regs like misc and zero regs, which
         // can be recognized because the new mapping is the same as
         // the old one.
-        if (hb_it->newPhysReg != hb_it->prevPhysReg) {
-            freeList->addReg(hb_it->prevPhysReg);
+        if (hb_it->newEntry != hb_it->prevEntry) {
+            freeList->addReg(hb_it->prevEntry.physReg);
         }
-        if (hb_it->prevPhysReg->classValue()== FloatRegClass) {
+        if (hb_it->prevEntry.physReg->classValue()== FloatRegClass) {
            ++stats.fpReturned;
         }
-        if (hb_it->prevPhysReg->classValue()== IntRegClass) {
+        if (hb_it->prevEntry.physReg->classValue()== IntRegClass) {
            ++stats.intReturned;
         }
 
@@ -1057,14 +1067,19 @@ Rename::renameSrcRegs(const DynInstPtr &inst, ThreadID tid)
     unsigned num_src_regs = inst->numSrcRegs();
     auto *isa = tc->getIsaPtr();
 
+    // [STT++] Track the running YRoT among all srcs.
+    assert(!yrotValid(inst->yrotXmits) && !yrotValid(inst->yrotSrcs));
+    inst->yrotXmits = NoYRoT;
+    inst->yrotSrcs = NoYRoT;
+
     // Get the architectual register numbers from the source and
     // operands, and redirect them to the right physical register.
     for (int src_idx = 0; src_idx < num_src_regs; src_idx++) {
         const RegId& src_reg = inst->srcRegIdx(src_idx);
         const RegId flat_reg = src_reg.flatten(*isa);
-        PhysRegIdPtr renamed_reg;
+        const RenameEntry rename_entry = map->lookup(flat_reg);
+        const PhysRegIdPtr renamed_reg = rename_entry.physReg;
 
-        renamed_reg = map->lookup(flat_reg);
         switch (flat_reg.classValue()) {
           case InvalidRegClass:
             break;
@@ -1118,6 +1133,11 @@ Rename::renameSrcRegs(const DynInstPtr &inst, ThreadID tid)
                     renamed_reg->className());
         }
 
+        // [STT++] Update YRoT for transmitters and srcs.
+        inst->yrotSrcs = std::max(inst->yrotSrcs, rename_entry.yrot);
+        if (inst->staticInst->srcTransmitted(src_idx))
+            inst->yrotXmits = std::max(inst->yrotXmits, rename_entry.yrot);
+
         ++stats.lookups;
     }
 }
@@ -1138,18 +1158,18 @@ Rename::renameDestRegs(const DynInstPtr &inst, ThreadID tid)
         RegId flat_dest_regid = dest_reg.flatten(*isa);
         flat_dest_regid.setNumPinnedWrites(dest_reg.getNumPinnedWrites());
 
-        rename_result = map->rename(flat_dest_regid);
+        rename_result = map->rename(flat_dest_regid, inst->yrotDests);
 
         inst->flattenedDestIdx(dest_idx, flat_dest_regid);
 
-        scoreboard->unsetReg(rename_result.first);
+        scoreboard->unsetReg(rename_result.first.physReg);
 
         DPRINTF(Rename,
                 "[tid:%i] "
                 "Renaming arch reg %i (%s) to physical reg %i (%i).\n",
                 tid, dest_reg.index(), dest_reg.className(),
-                rename_result.first->index(),
-                rename_result.first->flatIndex());
+                rename_result.first.physReg->index(),
+                rename_result.first.physReg->flatIndex());
 
         // Record the rename information so that a history can be kept.
         RenameHistory hb_entry(inst->seqNum, flat_dest_regid,
@@ -1196,11 +1216,11 @@ Rename::handleMiscRegWaW(DynInstPtr &inst, ThreadID tid)
 
         const RegId &dest_reg = inst->destRegIdx(dest_idx);
         const RegId flat_reg = dest_reg.flatten(*isa);
-        PhysRegIdPtr phys_reg = map->lookup(flat_reg);
+        PhysRegIdPtr phys_reg = map->lookup(flat_reg).physReg;
 
         if (phys_reg->classValue() == MiscRegClass &&
             !phys_reg->isAlwaysReady() &&
-            !scoreboard->getReg(map->lookup(flat_reg))) {
+            !scoreboard->getReg(phys_reg)) {
 
             inst->setSerializeBefore();
             return;
@@ -1503,10 +1523,10 @@ Rename::dumpHistory()
                     (*buf_it).instSeqNum,
                     (*buf_it).archReg.className(),
                     (*buf_it).archReg.index(),
-                    (*buf_it).newPhysReg->index(),
-                    (*buf_it).newPhysReg->className(),
-                    (*buf_it).prevPhysReg->index(),
-                    (*buf_it).prevPhysReg->className());
+                    (*buf_it).newEntry.physReg->index(),
+                    (*buf_it).newEntry.physReg->className(),
+                    (*buf_it).prevEntry.physReg->index(),
+                    (*buf_it).prevEntry.physReg->className());
 
             buf_it++;
         }

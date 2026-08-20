@@ -62,6 +62,7 @@
 #include "cpu/static_inst.hh"
 #include "cpu/static_inst_fwd.hh"
 #include "cpu/thread_context.hh"
+#include "cpu/op_class.hh"
 #include "debug/DynInst.hh"
 #include "debug/IQ.hh"
 #include "debug/O3PipeView.hh"
@@ -90,6 +91,9 @@ DynInst::DynInst(const Arrays &arrays, const StaticInstPtr &static_inst,
     instFlags[Predicate] = true;
     instFlags[MemAccPredicate] = true;
 
+    /*** [Jiyong,STT] ***/
+    instFlags[HasPendingSquash] = false;
+    
 #ifndef NDEBUG
     ++cpu->instcount;
 
@@ -431,6 +435,9 @@ Fault
 DynInst::initiateMemRead(Addr addr, unsigned size, Request::Flags flags,
                                const std::vector<bool> &byte_enable)
 {
+    // [STT++] Don't start translation if the inputs are tainted.
+    assert(!isXmitTainted());
+
     assert(byte_enable.size() == size);
     return cpu->pushRequest(
         dynamic_cast<DynInstPtr::PtrType>(this),
@@ -670,6 +677,33 @@ DynInst::readStCondFailures() const
 void
 DynInst::setStCondFailures(unsigned int sc_failures)
 { thread->storeCondFailures = sc_failures; }
+
+/*** [Jiyong,STT] ***/
+bool
+DynInst::readyToIssue_UT() const
+{
+    if (!status[CanIssue])
+        return false;
+
+    // Address and control transmitters
+    // are handled specially.
+    if (isMemRef() || isControl())
+        return true;
+
+    // Otherwise, it's only ready to issue if its transmitted
+    // operands are untainted.
+    return !isXmitTainted();
+}
+
+bool
+DynInst::isXmitTainted() const
+{
+    if (!cpu->STT)
+        return false;
+    if (isUnsquashable())
+        assert(yrotXmits <= cpu->untaintBroadcast);
+    return yrotXmits > cpu->untaintBroadcast;
+}
 
 } // namespace o3
 } // namespace gem5

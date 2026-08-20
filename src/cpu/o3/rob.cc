@@ -349,6 +349,8 @@ ROB::doSquash(ThreadID tid)
         // it can drain out of the pipeline.
         (*squashIt[tid])->setSquashed();
 
+        (*squashIt[tid])->hasPendingSquash(false);
+
         (*squashIt[tid])->setCanCommit();
 
 
@@ -527,6 +529,90 @@ ROB::findInst(ThreadID tid, InstSeqNum squash_inst)
         }
     }
     return NULL;
+}
+
+/* **************************
+ * [SafeSpec] update load insts state
+ * isPrevInstsCompleted; isPrevBrsResolved
+ * *************************/
+void
+ROB::updateVisibleState()
+{
+    for (ThreadID tid : *activeThreads) {
+        if (instList[tid].empty())
+            continue;
+
+        bool prevInstsComplete = true;
+        bool prevBrsResolved = true;
+        bool prevInstsCommitted = true;
+
+	for (const DynInstPtr &inst : instList[tid]) {
+            if (!prevInstsComplete && !prevBrsResolved)
+                break;
+
+	    if (prevInstsComplete) {
+	      inst->setPrevInstsCompleted();
+	    }
+	    if (prevBrsResolved){
+	      inst->setPrevBrsResolved();
+	    }
+	    if (prevInstsCommitted) {
+	      inst->setPrevInstsCommitted();
+	    }
+
+            // Update prev control insts state
+            if (inst->isControl()){
+                if (!inst->readyToCommit() || inst->getFault()!=NoFault
+                        || inst->isSquashed()){
+                    prevBrsResolved = false;
+                }
+            }
+
+            prevInstsCommitted = false;
+
+            // Update prev insts state
+            if (inst->isNonSpeculative() || inst->isStoreConditional()
+		|| inst->isFullMemBarrier() || inst->isReadBarrier()
+                || inst->isWriteBarrier() || (inst->isLoad() && inst->strictlyOrdered())) {
+                // Some special instructions, directly set canCommit
+                // when entering ROB
+                prevInstsComplete = false;
+            }
+            if (!inst->readyToCommit() || inst->getFault()!=NoFault || inst->isSquashed()) {
+                prevInstsComplete = false;
+            }
+
+            /*** [Jiyong, STT] add logic for updating flags when apply STT ***/
+            if (cpu->STT) {
+                // fence
+                if ((cpu->isFuturistic && inst->isPrevInstsCompleted()) ||
+                    (!cpu->isFuturistic && inst->isPrevBrsResolved())){
+                    inst->isUnsquashable(true);
+
+                    // [STT++] Perform untaint broadcast for this instruction.
+		    cpu->untaintBroadcast = std::max(
+                        cpu->untaintBroadcast, inst->seqNum);
+                } else {
+                    inst->isUnsquashable(false);
+                }
+            } else {
+                // unsafebaseline
+                inst->isUnsquashable(true);
+            }
+        }
+    }
+}
+
+DynInstPtr
+ROB::getResolvedPendingSquashInst(ThreadID tid)
+{
+    for (const DynInstPtr &inst : instList[tid]) {
+        if (inst->hasPendingSquash() && !inst->isXmitTainted() && 
+            !inst->isSquashed()) {
+            return inst;
+        }
+    }
+    return nullptr;
 }
 
 } // namespace o3

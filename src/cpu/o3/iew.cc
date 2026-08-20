@@ -1241,6 +1241,14 @@ IEW::executeInsts()
             DPRINTF(IEW, "Execute: Calculating address for memory "
                     "reference.\n");
 
+            // [STT+] Delay if the inputs are tainted.
+	    if (cpu->STT && inst->isXmitTainted()) {
+                DPRINTF(IEW,
+                        "STT: Delaying memory access due to tainted input.\n");
+                instQueue.deferMemInst(inst);
+                continue;
+	    }
+
             // Tell the LDSTQ to execute this instruction (if it is a load).
             if (inst->isAtomic()) {
                 // AMOs are treated like store requests
@@ -1333,7 +1341,19 @@ IEW::executeInsts()
         // instruction first, so the branch resolution order will be correct.
         ThreadID tid = inst->threadNumber;
 
-        if (!fetchRedirect[tid] ||
+
+	if (cpu->STT && inst->isControl() && inst->mispredicted() && inst->isXmitTainted() && !inst->isUnsquashable()) {
+	    // The instruction is a branch which was mispredicted but tainted.
+	    // In order to avoid this tainted mispredicted branch from hiding
+	    // a younger *untainted* branch misprediction (which would create
+	    // a secret-dependent squash signal), instead just directly mark
+	    // this instruction as having a pending squash. This is functionally
+	    // equivalent to sending all tainted branch mispredictions to the
+	    // commit stage.
+	    DPRINTF(IEW, "[tid:%i] [sn:%llu] Execute: Tainted branch misprediction detected.\n",
+		  tid, inst->seqNum);
+	    inst->hasPendingSquash(true);
+	} else if (!fetchRedirect[tid] ||
             !toCommit->squash[tid] ||
             toCommit->squashedSeqNum[tid] > inst->seqNum) {
 
@@ -1365,6 +1385,7 @@ IEW::executeInsts()
                 }
             } else if (ldstQueue.violation(tid)) {
                 assert(inst->isMemRef());
+		assert(!inst->isXmitTainted());
                 // If there was an ordering violation, then get the
                 // DynInst that caused the violation.  Note that this
                 // clears the violation signal.
@@ -1482,6 +1503,12 @@ IEW::writebackInsts()
 }
 
 void
+IEW::wakeUntaintInsts()
+{
+    instQueue.wakeUntaintInsts();
+}
+
+void
 IEW::tick()
 {
     wbNumInst = 0;
@@ -1507,10 +1534,15 @@ IEW::tick()
         dispatch(tid);
     }
 
+    ldstQueue.updateVisibleState();
+
     if (exeStatus != Squashing) {
         executeInsts();
 
         writebackInsts();
+
+        if (cpu->STT)
+            wakeUntaintInsts();
 
         // Have the instruction queue try to schedule any ready instructions.
         // (In actuality, this scheduling is for instructions that will

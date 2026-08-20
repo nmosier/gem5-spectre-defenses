@@ -69,16 +69,18 @@ SimpleRenameMap::init(const RegClass &reg_class, SimpleFreeList *_freeList)
 }
 
 SimpleRenameMap::RenameInfo
-SimpleRenameMap::rename(const RegId& arch_reg)
+SimpleRenameMap::rename(const RegId& arch_reg, InstSeqNum yrot)
 {
     PhysRegIdPtr renamed_reg;
     // Record the current physical register that is renamed to the
     // requested architected register.
-    PhysRegIdPtr prev_reg = map[arch_reg.index()];
+    const RenameEntry prev_entry = map[arch_reg.index()];
+    const PhysRegIdPtr prev_reg = prev_entry.physReg;
 
     if (arch_reg.is(InvalidRegClass)) {
         assert(prev_reg->is(InvalidRegClass));
         renamed_reg = prev_reg;
+        yrot = NoYRoT;
     } else if (prev_reg->getNumPinnedWrites() > 0) {
         // Do not rename if the register is pinned
         assert(arch_reg.getNumPinnedWrites() == 0);  // Prevent pinning the
@@ -87,9 +89,10 @@ SimpleRenameMap::rename(const RegId& arch_reg)
                 prev_reg->getNumPinnedWrites());
         renamed_reg = prev_reg;
         renamed_reg->decrNumPinnedWrites();
+        yrot = NoYRoT;
     } else {
         renamed_reg = freeList->getReg();
-        map[arch_reg.index()] = renamed_reg;
+        map[arch_reg.index()] = RenameEntry(renamed_reg, yrot);
         renamed_reg->setNumPinnedWrites(arch_reg.getNumPinnedWrites());
         renamed_reg->setNumPinnedWritesToComplete(
             arch_reg.getNumPinnedWrites() + 1);
@@ -100,7 +103,7 @@ SimpleRenameMap::rename(const RegId& arch_reg)
             arch_reg, renamed_reg->flatIndex(), renamed_reg->flatIndex(),
             prev_reg->flatIndex(), prev_reg->flatIndex());
 
-    return RenameInfo(renamed_reg, prev_reg);
+    return RenameInfo(RenameEntry(renamed_reg, yrot), prev_entry);
 }
 
 

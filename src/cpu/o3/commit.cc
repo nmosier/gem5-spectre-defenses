@@ -150,6 +150,7 @@ Commit::Commit(CPU *_cpu, const BaseO3CPUParams &params)
         htmStops[tid] = 0;
     }
     interrupt = NoFault;
+    stalled_counter = 0;
 }
 
 std::string Commit::name() const { return cpu->name() + ".commit"; }
@@ -842,6 +843,16 @@ Commit::commit()
             }
 
             set(toIEW->commitInfo[tid].pc, fromIEW->pc[tid]);
+
+        } else if (cpu->STT) {
+            DynInstPtr resolvedPendingSquashInst =
+                rob->getResolvedPendingSquashInst(tid);
+            if (resolvedPendingSquashInst &&
+                commitStatus[tid] != TrapPending &&
+                resolvedPendingSquashInst->seqNum <= youngestSeqNum[tid]){
+                resolvedPendingSquashInst->hasPendingSquash(false);
+                handleSquashSignalFromROB(tid, resolvedPendingSquashInst);
+            }
         }
 
         if (commitStatus[tid] == ROBSquashing) {
@@ -891,8 +902,75 @@ Commit::commit()
             toIEW->commitInfo[tid].freeROBEntries = rob->numFreeEntries(tid);
             wroteToTimeBuffer = true;
         }
-
     }
+}
+
+void
+Commit::handleSquashSignalFromROB(ThreadID tid, DynInstPtr &pendingMispInst)
+{
+    // only STT has this mode
+    assert(cpu->STT);
+
+    DPRINTF(Commit, "[tid:%i]: (Lazy enabled) A pending squash [sn:%lli,0x%lx] PC %s can be resolved now\n",
+            tid,
+            pendingMispInst->seqNum,
+            pendingMispInst->seqNum,
+            pendingMispInst->pcState());
+
+    std::unique_ptr<PCStateBase> nextPC(pendingMispInst->pcState().clone());
+
+    if (pendingMispInst->isControl()) {
+        DPRINTF(Commit,
+                "[tid:%i]: (Lazy) Squashing due to branch mispred PC:%#x [sn:%i]\n",
+                tid,
+		pendingMispInst->pcState().instAddr(),
+                pendingMispInst->seqNum);
+        pendingMispInst->staticInst->advancePC(*nextPC);
+    } else if (pendingMispInst->isLoad()){
+        DPRINTF(Commit,
+            "[tid:%i]: (Lazy) Squashing due to order violation [sn:%i]\n",
+            tid, pendingMispInst->seqNum);
+    } else {
+        panic("unreachable!\n");
+    }
+
+
+    DPRINTF(Commit, "[tid:%i]: (Lazy) Redirecting to PC %#x\n",
+            tid,
+            *nextPC);
+
+    commitStatus[tid] = ROBSquashing;
+
+    InstSeqNum squashed_inst = pendingMispInst->seqNum;
+
+    if (pendingMispInst->isLoad())
+        squashed_inst--;
+
+    youngestSeqNum[tid] = squashed_inst;
+
+    rob->squash(squashed_inst, tid);
+    changedROBNumEntries[tid] = true;
+
+    toIEW->commitInfo[tid].doneSeqNum = squashed_inst;
+    toIEW->commitInfo[tid].squash = true;
+    toIEW->commitInfo[tid].robSquashing = true;
+
+    if (pendingMispInst->isControl()){
+        toIEW->commitInfo[tid].mispredictInst = pendingMispInst;
+        toIEW->commitInfo[tid].branchTaken = pendingMispInst->pcState().branching();
+    } else
+        toIEW->commitInfo[tid].mispredictInst = NULL;
+
+    toIEW->commitInfo[tid].squashInst = rob->findInst(tid, squashed_inst);
+
+    if (toIEW->commitInfo[tid].mispredictInst) {
+        if (toIEW->commitInfo[tid].mispredictInst->isUncondCtrl()) {
+            toIEW->commitInfo[tid].branchTaken = true;
+        }
+        ++stats.branchMispredicts;
+    }
+
+    set(toIEW->commitInfo[tid].pc, *nextPC);
 }
 
 void
@@ -982,6 +1060,12 @@ Commit::commitInsts()
 
             // Try to commit the head instruction.
             bool commit_success = commitHead(head_inst, num_committed);
+
+            /*** [Jiyong, STT] sanity check ***/
+            if (commit_success)
+                stalled_counter = 0;
+	    stalled_counter++;
+            panic_if(stalled_counter == 100000, "Braindead!\n");
 
             if (commit_success) {
                 ++num_committed;
@@ -1264,8 +1348,12 @@ Commit::commitHead(const DynInstPtr &head_inst, unsigned inst_num)
 
     // Update the commit rename map
     for (int i = 0; i < head_inst->numDestRegs(); i++) {
+        assert(yrotValid(head_inst->yrotDests));
+        const RenameEntry rename_entry(
+            head_inst->renamedDestIdx(i),
+            head_inst->yrotDests);
         renameMap[tid]->setEntry(head_inst->flattenedDestIdx(i),
-                                 head_inst->renamedDestIdx(i));
+                                 rename_entry);
     }
 
     // hardware transactional memory
@@ -1345,6 +1433,11 @@ Commit::markCompletedInsts()
             fromIEW->insts[inst_num]->setCanCommit();
         }
     }
+
+    // [SafeSpec]
+    // update load status
+    // isPrevInstsCompleted; isPrevBrsResolved
+    rob->updateVisibleState();
 }
 
 void

@@ -212,6 +212,10 @@ class ROB
     /** Updates the tail instruction with the new youngest instruction. */
     void updateTail();
 
+    /** [SafeSpce] Updates load instructions visible condition
+     *  set isPrevInstsCompleted and isPrevBrsResolved. */
+    void updateVisibleState();
+
     /** Reads the PC of the oldest head instruction. */
 //    uint64_t readHeadPC();
 
@@ -265,6 +269,10 @@ class ROB
      *  double checking that variable.
      */
     size_t countInsts(ThreadID tid);
+
+    // find a instr in a rob list which has a pending squash, but is not argTaintewhich has a pending squash, but is not argTainted
+    // which means that we should execute this squash
+    DynInstPtr getResolvedPendingSquashInst(ThreadID tid);
 
   private:
     /** Reset the ROB state */

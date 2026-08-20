@@ -248,6 +248,7 @@ InstructionQueue::InstructionQueue(CPU *cpu_ptr, IEW *iew_ptr,
     : cpu(cpu_ptr),
       iewStage(iew_ptr),
       iqs(params.instQueues),
+      activeThreads(nullptr),
       insertionPolicy(params.iqInsertionPolicy),
       numThreads(params.numThreads),
       totalWidth(params.issueWidth),
@@ -554,6 +555,7 @@ InstructionQueue::resetState()
 void
 InstructionQueue::setActiveThreads(list<ThreadID> *at_ptr)
 {
+    activeThreads = at_ptr;
     for (auto iq : iqs) {
         iq->setActiveThreads(at_ptr);
     }
@@ -1273,6 +1275,36 @@ InstructionQueue::wakeDependents(const DynInstPtr &completed_inst)
     return dependents;
 }
 
+/*** [Jiyong,STT] ***/
+void
+InstructionQueue::wakeUntaintInsts()
+{
+    assert (cpu->STT);
+
+    DPRINTF(IQ, "wakeUntaintInsts begin.\n");
+
+    for (ThreadID tid : *activeThreads) {
+        for (auto it = stalledTaintedInstList[tid].begin();
+	     it != stalledTaintedInstList[tid].end(); ) {
+            DynInstPtr inst = *it;
+            if (inst->isSquashed()) {
+                inst->removeFromStallList();
+                it = stalledTaintedInstList[tid].erase(it);
+            }
+            else if (inst->readyToIssue_UT()) {
+                inst->removeFromStallList();
+                addIfReady(inst);
+                it = stalledTaintedInstList[tid].erase(it);
+            }
+            else {
+                it++;
+            }
+        }
+    }
+
+    DPRINTF(IQ, "wakeUntaintInsts done.\n");
+}
+
 void
 InstructionQueue::addReadyMemInst(const DynInstPtr &ready_inst)
 {
@@ -1354,7 +1386,15 @@ InstructionQueue::getDeferredMemInstToExecute()
 {
     for (ListIt it = deferredMemInsts.begin(); it != deferredMemInsts.end();
          ++it) {
-        if ((*it)->translationCompleted() || (*it)->isSquashed()) {
+        // [SafeSpec] we need to check the FenceDelay
+        // a load can be delayed due to
+        // 1. translation delay
+        // 2. virtual fence ahead
+        // 3. not ready to expose and gets a TLB miss
+        // for both (2, 3) we need to restart the translation
+        if ((*it)->translationCompleted() ||
+            (*it)->isSquashed() ||
+	    !(*it)->isXmitTainted()) {
             DynInstPtr mem_inst = std::move(*it);
             deferredMemInsts.erase(it);
             return mem_inst;
@@ -1642,6 +1682,15 @@ InstructionQueue::addIfReady(const DynInstPtr &inst)
     // available, then add it to the list of ready instructions.
     if (inst->readyToIssue()) {
 
+        if (cpu->STT && !inst->readyToIssue_UT()) {
+            // [Jiyong, STT]: if ready but tainted, we put it in stallList
+            assert (inst->isXmitTainted());
+            if (!inst->isInStallList()) {
+                inst->addToStallList();
+                stalledTaintedInstList[inst->threadNumber].push_back(inst);
+            }
+        }
+      
         //Add the instruction to the proper ready list.
         if (inst->isMemRef()) {
 

@@ -243,6 +243,10 @@ class BaseO3CPU(BaseCPU):
         1, "Max number of taken predictions per cycle"
     )
 
+    # [Jiyong, STT] STT configurations
+    threatModel = Param.String('UnsafeBaseline', "The threat model specificed for simulation")
+    STT = Param.Bool(False, "Apply STT protection mechanism")
+    implicitChannel = Param.Bool(False, "If handling implicit channel")
 
 add_citation(
     BaseO3CPU,

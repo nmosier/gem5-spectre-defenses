@@ -54,12 +54,37 @@
 #include "cpu/o3/free_list.hh"
 #include "cpu/o3/regfile.hh"
 #include "cpu/reg_class.hh"
+#include "cpu/stt.hh"
 
 namespace gem5
 {
 
 namespace o3
 {
+
+struct RenameEntry
+{
+    PhysRegIdPtr physReg;
+    InstSeqNum yrot = InvalidYRoT; // [STT++]
+
+    RenameEntry() = default;
+
+    RenameEntry(PhysRegIdPtr phys_reg, InstSeqNum yrot)
+        : physReg(phys_reg), yrot(yrot)
+    {
+    }
+
+    bool operator==(const RenameEntry& o) const
+    {
+        // [STT++] Note: we're not including the taint/yrot in the comparison.
+        return physReg == o.physReg;
+    }
+
+    bool operator!=(const RenameEntry& o) const
+    {
+        return !(*this == o);
+    }
+};
 
 /**
  * Register rename map for a single class of registers (e.g., integer
@@ -71,7 +96,7 @@ namespace o3
 class SimpleRenameMap
 {
   private:
-    using Arch2PhysMap = std::vector<PhysRegIdPtr>;
+    using Arch2PhysMap = std::vector<RenameEntry>;
     /** The acutal arch-to-phys register map */
     Arch2PhysMap map;
   public:
@@ -102,7 +127,7 @@ class SimpleRenameMap
      * renamed to, and the previous physical register that the same
      * logical register was previously mapped to.
      */
-    typedef std::pair<PhysRegIdPtr, PhysRegIdPtr> RenameInfo;
+    typedef std::pair<RenameEntry, RenameEntry> RenameInfo;
 
     /**
      * Tell rename map to get a new free physical register to remap
@@ -111,14 +136,14 @@ class SimpleRenameMap
      * @return A RenameInfo pair indicating both the new and previous
      * physical registers.
      */
-    RenameInfo rename(const RegId& arch_reg);
+    RenameInfo rename(const RegId& arch_reg, InstSeqNum yrot);
 
     /**
      * Look up the physical register mapped to an architectural register.
      * @param arch_reg The architectural register to look up.
      * @return The physical register it is currently mapped to.
      */
-    PhysRegIdPtr
+    const RenameEntry&
     lookup(const RegId& arch_reg) const
     {
         assert(arch_reg.index() <= map.size());
@@ -132,10 +157,10 @@ class SimpleRenameMap
      * @param phys_reg The physical register to remap it to.
      */
     void
-    setEntry(const RegId& arch_reg, PhysRegIdPtr phys_reg)
+    setEntry(const RegId& arch_reg, const RenameEntry& ent)
     {
         assert(arch_reg.index() <= map.size());
-        map[arch_reg.index()] = phys_reg;
+        map[arch_reg.index()] = ent;
     }
 
     /** Return the number of free entries on the associated free list. */
@@ -203,11 +228,12 @@ class UnifiedRenameMap
      * physical registers.
      */
     RenameInfo
-    rename(const RegId& arch_reg)
+    rename(const RegId& arch_reg, InstSeqNum yrot)
     {
         if (!arch_reg.isRenameable()) {
             // misc regs aren't really renamed, just remapped
-            PhysRegIdPtr phys_reg = lookup(arch_reg);
+            const RenameEntry entry = lookup(arch_reg);
+            const PhysRegIdPtr &phys_reg = entry.physReg;
             if (!phys_reg->isAlwaysReady()) {
                 phys_reg->setNumPinnedWrites(arch_reg.getNumPinnedWrites());
                 phys_reg->setNumPinnedWritesToComplete(
@@ -215,10 +241,10 @@ class UnifiedRenameMap
             }
             // Set the new register to the previous one to keep the same
             // mapping throughout the execution.
-            return RenameInfo(phys_reg, phys_reg);
+            return RenameInfo(entry, entry);
         }
 
-        return renameMaps[arch_reg.classValue()].rename(arch_reg);
+        return renameMaps[arch_reg.classValue()].rename(arch_reg, yrot);
     }
 
     /**
@@ -228,16 +254,19 @@ class UnifiedRenameMap
      * @param arch_reg The architectural register to look up.
      * @return The physical register it is currently mapped to.
      */
-    PhysRegIdPtr
+    RenameEntry
     lookup(const RegId& arch_reg) const
     {
         auto reg_class = arch_reg.classValue();
         if (reg_class == InvalidRegClass) {
-            return &invalidPhysRegId;
-        } else if (reg_class == MiscRegClass) {
+            return RenameEntry(&invalidPhysRegId, NoYRoT);
+         } else if (reg_class == MiscRegClass) {
             // misc regs aren't really renamed, they keep the same
             // mapping throughout the execution.
-            return regFile->getMiscRegId(arch_reg.index());
+            // [STT++] FIXME: Should misc regs be tainted?
+            return RenameEntry(
+                regFile->getMiscRegId(arch_reg.index()),
+                NoYRoT);
         }
         return renameMaps[reg_class].lookup(arch_reg);
     }
@@ -251,19 +280,19 @@ class UnifiedRenameMap
      * @param phys_reg The physical register to remap it to.
      */
     void
-    setEntry(const RegId& arch_reg, PhysRegIdPtr phys_reg)
+    setEntry(const RegId& arch_reg, const RenameEntry& ent)
     {
-        assert(phys_reg->is(arch_reg.classValue()));
+        assert(ent.physReg->is(arch_reg.classValue()));
         if (!arch_reg.isRenameable()) {
             // Misc registers do not actually rename, so don't change
             // their mappings.  We end up here when a commit or squash
             // tries to update or undo a hardwired misc reg nmapping,
             // which should always be setting it to what it already is.
-            assert(phys_reg == lookup(arch_reg));
+            assert(ent.physReg == lookup(arch_reg).physReg);
             return;
         }
 
-        return renameMaps[arch_reg.classValue()].setEntry(arch_reg, phys_reg);
+        return renameMaps[arch_reg.classValue()].setEntry(arch_reg, ent);
     }
 
     /**

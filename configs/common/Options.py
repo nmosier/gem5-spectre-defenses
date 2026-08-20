@@ -689,6 +689,15 @@ def addCommonOptions(parser, default_isa: Optional[ISA] = None):
         help="Override vendor string returned by CPUID instruction in X86.",
     )
 
+    # [SafeSpec] add options to configure scheme
+    parser.add_argument("--threat_model", default=None, action="store",
+                        choices=["UnsafeBaseline", "Spectre", "Futuristic"],
+                        help="Threat model selections")
+    # [Jiyong,DDIFT] add options for DDIFT configurations
+    parser.add_argument("--STT", default=None, action="store", type=int,
+                        help="Whether using STT mechanism(threat_model mustn't be Unsafe.")
+    parser.add_argument("--implicit_channel", default=None, action="store", type=int,
+                        help="Whether enabling defense mechanism for implicit channel")
 
 def addSEOptions(parser):
     # Benchmark options
