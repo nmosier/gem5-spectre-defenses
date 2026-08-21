@@ -70,16 +70,22 @@ class L1Cache(MESI_Two_Level_L1Cache_Controller):
         self.connectQueues(network)
 
         # This is the cache memory object that stores the cache data and tags
+        # start_index_bit is the LOG of the line size: passing the line
+        # size itself (64) indexes sets starting at address bit 64,
+        # degenerating the cache to a handful of usable sets (measured:
+        # 21x the L1D miss rate of the deprecated se.py Ruby config on
+        # an identical workload slice).
+        block_size_bits = int(math.log(self._cache_line_size, 2))
         self.L1Icache = RubyCache(
             size=l1i_size,
             assoc=l1i_assoc,
-            start_index_bit=self._cache_line_size,
+            start_index_bit=block_size_bits,
             is_icache=True,
         )
         self.L1Dcache = RubyCache(
             size=l1d_size,
             assoc=l1d_assoc,
-            start_index_bit=self._cache_line_size,
+            start_index_bit=block_size_bits,
             is_icache=False,
         )
         self.l2_select_num_bits = int(math.log(num_l2Caches, 2))
