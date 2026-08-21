@@ -1684,11 +1684,19 @@ InstructionQueue::addIfReady(const DynInstPtr &inst)
 
         if (cpu->STT && !inst->readyToIssue_UT()) {
             // [Jiyong, STT]: if ready but tainted, we put it in stallList
+            // INSTEAD of the ready lists: falling through would issue the
+            // tainted transmitter anyway (defeating the defense) and,
+            // once wakeUntaintInsts() re-adds it after untainting, leave
+            // a duplicate ready entry whose IQUnit pointer was cleared at
+            // first issue -- the assert(iq) crash in
+            // scheduleReadyInsts().  It re-enters here via
+            // wakeUntaintInsts() once untainted.
             assert (inst->isXmitTainted());
             if (!inst->isInStallList()) {
                 inst->addToStallList();
                 stalledTaintedInstList[inst->threadNumber].push_back(inst);
             }
+            return;
         }
       
         //Add the instruction to the proper ready list.
