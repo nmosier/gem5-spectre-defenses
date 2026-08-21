@@ -49,7 +49,10 @@ isa_string_map = {
 
 # [STT] add knob to configure the CPU modes/simulation schemes
 def config_scheme(cpu_cls, cpu_list, options):
-    if issubclass(cpu_cls, m5.objects.DerivO3CPU):
+    # Modern gem5 renamed DerivO3CPU to per-ISA <ISA>O3CPU classes; key
+    # off the common BaseO3CPU instead so the deprecated se.py path
+    # still configures the defense.
+    if issubclass(cpu_cls, m5.objects.BaseO3CPU):
         # Assign the same file name to all cpus for now.
         if options.threat_model==None:
             fatal("Need to provide threat_model "
