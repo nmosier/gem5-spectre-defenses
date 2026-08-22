@@ -151,6 +151,17 @@ class Memory64 : public MightBeMicro64
     unsigned memAccessFlags;
 
     void setExcAcRel(bool exclusive, bool acrel);
+
+    /**
+     * [STT++] The address depends only on the base register; the data
+     * operand of a store is not transmitted.  Compare full RegIds, since a
+     * floating-point/vector data operand may share an index with the base.
+     */
+    bool
+    srcTransmitted(int src_idx) const override
+    {
+        return srcRegIdx(src_idx) == intRegClass[base];
+    }
 };
 
 class MemoryImm64 : public Memory64
@@ -242,6 +253,14 @@ class MemoryReg64 : public Memory64
 
     std::string generateDisassembly(
             Addr pc, const loader::SymbolTable *symtab) const override;
+
+    /** [STT++] The offset register feeds the address as well. */
+    bool
+    srcTransmitted(int src_idx) const override
+    {
+        return Memory64::srcTransmitted(src_idx) ||
+            srcRegIdx(src_idx) == intRegClass[offset];
+    }
 };
 
 class MemoryRaw64 : public Memory64

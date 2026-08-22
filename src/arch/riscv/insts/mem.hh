@@ -60,6 +60,13 @@ class Load : public MemInst
 
     std::string generateDisassembly(
         Addr pc, const loader::SymbolTable *symtab) const override;
+
+    /** [STT++] Rs1 is the address base, and is the only source. */
+    bool
+    srcTransmitted(int src_idx) const override
+    {
+        return true;
+    }
 };
 
 class Store : public MemInst
@@ -69,6 +76,13 @@ class Store : public MemInst
 
     std::string generateDisassembly(
         Addr pc, const loader::SymbolTable *symtab) const override;
+
+    /** [STT++] src 0 is the address base Rs1; src 1 is the stored data. */
+    bool
+    srcTransmitted(int src_idx) const override
+    {
+        return src_idx == 0;
+    }
 };
 
 } // namespace RiscvISA

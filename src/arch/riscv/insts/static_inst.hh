@@ -103,6 +103,22 @@ class RiscvStaticInst : public StaticInst
     {
         return simpleAsBytes(buf, size, machInst);
     }
+
+    /**
+     * [STT++] Conservative default for RISC-V memory accesses.
+     *
+     * StaticInst::srcTransmitted() asserts on memory references, since a
+     * transmitter's address operands have to be identified per ISA.  Rather
+     * than aborting on every memory class we haven't classified yet (vector
+     * loads/stores, Zcmp push/pop, ...), fall back to treating *every* source
+     * of a memory reference as transmitted.  That is always safe -- it only
+     * over-approximates the taint -- and the classes below refine it.
+     */
+    bool
+    srcTransmitted(int src_idx) const override
+    {
+        return isMemRef() || StaticInst::srcTransmitted(src_idx);
+    }
 };
 
 /**

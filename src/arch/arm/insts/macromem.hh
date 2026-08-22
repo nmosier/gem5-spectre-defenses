@@ -433,6 +433,17 @@ class MicroMemOp : public MicroIntImmOp
 
     std::string generateDisassembly(
             Addr pc, const loader::SymbolTable *symtab) const override;
+
+    /**
+     * [STT++] EA = URb +/- imm, so only the base register is transmitted;
+     * URa is the loaded/stored data.  Compare full RegIds, since these
+     * microops also read CPSR and the condition-code registers.
+     */
+    bool
+    srcTransmitted(int src_idx) const override
+    {
+        return srcRegIdx(src_idx) == intRegClass[urb];
+    }
 };
 
 class MicroMemPairOp : public MicroOp
@@ -454,6 +465,13 @@ class MicroMemPairOp : public MicroOp
 
     std::string generateDisassembly(
             Addr pc, const loader::SymbolTable *symtab) const override;
+
+    /** [STT++] EA = URb +/- imm; dest/dest2 carry the data. */
+    bool
+    srcTransmitted(int src_idx) const override
+    {
+        return srcRegIdx(src_idx) == intRegClass[urb];
+    }
 };
 
 /**

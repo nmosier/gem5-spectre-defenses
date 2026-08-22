@@ -223,6 +223,17 @@ class Memory : public MightBeMicro
     }
 
     void printInst(std::ostream &os, AddrMode addrMode) const;
+
+    /**
+     * [STT++] The address depends only on the base register.  Compare full
+     * RegIds: these instructions also read CPSR and the condition-code
+     * registers, whose indices freely alias integer register indices.
+     */
+    bool
+    srcTransmitted(int src_idx) const override
+    {
+        return srcRegIdx(src_idx) == intRegClass[base];
+    }
 };
 
 // The address is a base register plus an immediate.
@@ -326,7 +337,15 @@ class MemoryReg : public Memory
           shiftAmt(_shiftAmt), shiftType(_shiftType), index(_index)
     {}
 
-    void printOffset(std::ostream &os) const;
+    void printOffset(std::ostream &os) const override;
+
+    /** [STT++] The offset register feeds the address as well. */
+    bool
+    srcTransmitted(int src_idx) const override
+    {
+        return Memory::srcTransmitted(src_idx) ||
+            srcRegIdx(src_idx) == intRegClass[index];
+    }
 };
 
 class MemoryDReg : public MemoryReg
