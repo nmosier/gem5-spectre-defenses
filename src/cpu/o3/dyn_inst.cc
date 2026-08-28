@@ -702,7 +702,17 @@ DynInst::isXmitTainted() const
         return false;
     if (isUnsquashable())
         assert(yrotXmits <= cpu->untaintBroadcast);
-    return yrotXmits > cpu->untaintBroadcast;
+
+    // [ReCon] A root of taint that belongs to a load which turned out to
+    // read an already-revealed word no longer taints anything; the root its
+    // address operands carried takes over. This is only safe when the root
+    // is the only one these operands carry -- otherwise the roots it hides
+    // would go with it. resolveYRoT is a no-op when ReCon is off, and
+    // returns immediately for an untainted instruction.
+    const InstSeqNum yrot = cpu->recon.resolveYRoT(
+        yrotXmits, yrotXmitsUnique, cpu->untaintBroadcast);
+
+    return yrot > cpu->untaintBroadcast;
 }
 
 } // namespace o3

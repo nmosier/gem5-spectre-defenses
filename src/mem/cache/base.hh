@@ -64,6 +64,7 @@
 #include "mem/cache/tags/base.hh"
 #include "mem/cache/write_queue.hh"
 #include "mem/packet.hh"
+#include "mem/recon.hh"
 #include "mem/packet_queue.hh"
 #include "mem/qport.hh"
 #include "mem/request.hh"
@@ -677,6 +678,33 @@ class BaseCache : public ClockedObject
     const bool writebackClean;
 
     /**
+     * [ReCon] Track, per cache line, which aligned 8-byte words have been
+     * revealed by non-speculative execution. Disabling this at a given
+     * level makes that level transparent to ReCon: it neither remembers
+     * reveals nor reports them, which only ever costs performance. This is
+     * how the L1-only and L1+L2 configurations of the paper are built.
+     */
+    const bool recon;
+
+    /**
+     * [ReCon] The mask of aligned 8-byte words of this block that a packet
+     * touches.
+     */
+    uint64_t
+    reconAccessMask(const PacketPtr pkt) const
+    {
+        return recon::wordMask(pkt->getAddr(), pkt->getSize(), blkSize);
+    }
+
+    /**
+     * [ReCon] Mark the addressed words of an already-resident line as
+     * revealed. Reveals are best-effort hints: one that misses is simply
+     * dropped, since failing to reveal only forgoes an optimization. The
+     * packet is consumed.
+     */
+    void handleReconReveal(PacketPtr pkt);
+
+    /**
      * Writebacks from the tempBlock, resulting on the response path
      * in atomic mode, must happen after the call to recvAtomic has
      * finished (for the right ordering of the packets). We therefore
@@ -1097,6 +1125,13 @@ class BaseCache : public ClockedObject
 
         /** Number of blocks written back per thread. */
         statistics::Vector writebacks;
+
+        /** [ReCon] Reveal requests that found the line resident here. */
+        statistics::Scalar reconRevealHits;
+        /** [ReCon] Reveal requests dropped because the line was not here. */
+        statistics::Scalar reconRevealMisses;
+        /** [ReCon] Read hits that reported at least one revealed word. */
+        statistics::Scalar reconRevealedReads;
 
         /** Demand misses that hit in the MSHRs. */
         statistics::Formula demandMshrHits;

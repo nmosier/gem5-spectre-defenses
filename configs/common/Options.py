@@ -698,6 +698,17 @@ def addCommonOptions(parser, default_isa: Optional[ISA] = None):
                         help="Whether using STT mechanism(threat_model mustn't be Unsafe.")
     parser.add_argument("--implicit_channel", default=None, action="store", type=int,
                         help="Whether enabling defense mechanism for implicit channel")
+    # [ReCon] add options for ReCon configurations
+    parser.add_argument("--recon", default=0, action="store", type=int,
+                        help="Whether to apply the ReCon optimization on top "
+                             "of the secure speculation scheme")
+    parser.add_argument("--recon_lpt_entries", default=0, action="store",
+                        type=int,
+                        help="Entries in the ReCon load-pair table; 0 means "
+                             "one per physical integer register")
+    parser.add_argument("--recon_cache_levels", default="all", action="store",
+                        choices=["l1", "l1l2", "all"],
+                        help="Cache levels that track ReCon reveal state")
 
 def addSEOptions(parser):
     # Benchmark options

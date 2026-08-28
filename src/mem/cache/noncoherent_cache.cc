@@ -74,6 +74,11 @@ NoncoherentCache::satisfyRequest(PacketPtr pkt, CacheBlk *blk, bool, bool)
     // keep caches coherent (e.g., InvalidateReq or UpdateReq).
     assert(pkt->isRead() || pkt->isWrite());
     BaseCache::satisfyRequest(pkt, blk);
+
+    // [ReCon] We cannot tell whether a cache above us will write the line,
+    // so once we hand it up we must assume our reveal state is stale.
+    if (recon && pkt->isRead() && pkt->fromCache())
+        blk->setReconRevealed(0);
 }
 
 bool

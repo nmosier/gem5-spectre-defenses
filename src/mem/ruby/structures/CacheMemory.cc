@@ -333,6 +333,10 @@ CacheMemory::allocate(Addr address, AbstractCacheEntry *entry)
             DPRINTF(RubyCache, "Allocate clearing lock for addr: 0x%x\n",
                     address);
             set[i]->m_locked = -1;
+            // [ReCon] A line that has just arrived has revealed nothing;
+            // whatever the previous occupant of this slot had exposed says
+            // nothing about these bytes.
+            set[i]->setReconRevealed(0);
             m_tag_index[address] = i;
             set[i]->setPosition(cacheSet, i);
             set[i]->replacementData = replacement_data[cacheSet][i];

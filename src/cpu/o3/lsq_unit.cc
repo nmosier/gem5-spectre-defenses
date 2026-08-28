@@ -62,6 +62,7 @@
 #include "mem/htm.hh"
 #include "mem/packet.hh"
 #include "mem/port.hh"
+#include "mem/recon.hh"
 #include "mem/request.hh"
 #include "sim/cur_tick.hh"
 #include "sim/eventq.hh"
@@ -188,6 +189,19 @@ LSQUnit::completeDataAccess(PacketPtr pkt)
                     pkt->getHtmTransactionFailedInCacheRC() );
             }
 
+            // [ReCon] The response tells us whether the words this load
+            // read have already been revealed by non-speculative
+            // execution. If so the value is public, so the load is not a
+            // root of taint and its dependents need not wait on it. This
+            // is deliberately not reached by a load that got its value
+            // forwarded from a store: an in-flight store conceals its
+            // output, so forwarded data is never treated as revealed.
+            if (cpu->recon.enabled() && inst->isLoad() && !inst->isAtomic()
+                && !inst->isStoreConditional()
+                && pkt == request->mainPacket()) {
+                checkReconRevealed(inst, pkt);
+            }
+
             writeback(inst, request->mainPacket());
             if (inst->isStore() || inst->isAtomic()) {
                 request->writebackDone();
@@ -198,6 +212,21 @@ LSQUnit::completeDataAccess(PacketPtr pkt)
             // atomics), so it can complete without writing back
             completeStore(request->instruction()->sqIt);
         }
+    }
+}
+
+void
+LSQUnit::checkReconRevealed(const DynInstPtr &inst, PacketPtr pkt)
+{
+    // Only every word the load touched being revealed makes its whole
+    // result public. A load narrower than a word is fine: the enclosing
+    // word leaked in full, so any part of it is public too.
+    const uint64_t touched = recon::wordMask(
+        pkt->req->getPaddr(), pkt->req->getSize(), cpu->cacheLineSize());
+
+    if (touched && (pkt->getReconRevealed() & touched) == touched) {
+        inst->reconRevealed(true);
+        cpu->recon.loadRevealed(inst);
     }
 }
 

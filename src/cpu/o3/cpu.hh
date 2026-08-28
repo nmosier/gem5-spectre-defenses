@@ -66,6 +66,7 @@
 #include "cpu/o3/scoreboard.hh"
 #include "cpu/o3/thread_state.hh"
 #include "cpu/simple_thread.hh"
+#include "cpu/o3/recon.hh"
 #include "cpu/timebuf.hh"
 #include "params/BaseO3CPU.hh"
 #include "sim/process.hh"
@@ -628,6 +629,17 @@ class CPU : public BaseCPU
 
     // [STT++] The youngest nonspeculative instruction.
     InstSeqNum untaintBroadcast = NoYRoT;
+
+    // [ReCon] Load-pair detection and the record of which loads it has
+    // untainted.
+    Recon recon;
+
+    /**
+     * [ReCon] Ask the L1 to mark the word at a physical address as
+     * revealed. Returns whether the message was actually sent; a reveal
+     * that is dropped only costs an optimization.
+     */
+    bool reconReveal(Addr paddr, bool secure);
 };
 
 } // namespace o3

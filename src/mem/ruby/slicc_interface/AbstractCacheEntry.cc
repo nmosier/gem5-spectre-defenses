@@ -54,6 +54,7 @@ AbstractCacheEntry::AbstractCacheEntry() : ReplaceableEntry()
     m_Permission = AccessPermission_NotPresent;
     m_Address = 0;
     m_locked = -1;
+    m_recon_revealed = 0;
     m_last_touch_tick = 0;
     m_htmInReadSet = false;
     m_htmInWriteSet = false;

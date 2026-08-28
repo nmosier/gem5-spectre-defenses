@@ -148,6 +148,15 @@ Cache::satisfyRequest(PacketPtr pkt, CacheBlk *blk,
                 // otherwise only respond with a shared copy
                 pkt->setHasSharers();
             }
+
+            // [ReCon] If the requestor walks away with a writable copy --
+            // whether it asked for one or we silently passed exclusive
+            // ownership up -- it now owns the reveal state of this line.
+            // Our copy would go stale on its first store, so drop it. Only
+            // once the line comes back down as a writeback do we learn the
+            // reveal state again.
+            if (recon && !pkt->hasSharers())
+                blk->setReconRevealed(0);
         }
     }
 }
@@ -987,6 +996,12 @@ Cache::cleanEvictBlk(CacheBlk *blk)
 
     PacketPtr pkt = new Packet(req, MemCmd::CleanEvict);
     pkt->allocate();
+
+    // [ReCon] The evicted copy was clean, so its reveals are still valid
+    // for whoever still holds the line below us.
+    if (recon)
+        pkt->setReconRevealed(blk->getReconRevealed());
+
     DPRINTF(Cache, "Create CleanEvict %s\n", pkt->print());
 
     return pkt;

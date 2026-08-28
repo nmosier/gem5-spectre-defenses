@@ -276,6 +276,16 @@ RubyPort::MemResponsePort::recvTimingReq(PacketPtr pkt)
         assert(pkt->getSize() == pf->getSize());
     }
 
+    // [ReCon] A reveal is a hint aimed at the L1, not a memory
+    // transaction: it never allocates, never responds, and never blocks.
+    // Apply it here and free it, so it stays clear of the coherence
+    // protocol entirely.
+    if (pkt->cmd == MemCmd::ReconRevealReq) {
+        owner.reconReveal(pkt);
+        delete pkt;
+        return true;
+    }
+
     // ruby doesn't support cache maintenance operations at the
     // moment, as a workaround, we respond right away
     if (pkt->req->isCacheMaintenance() &&

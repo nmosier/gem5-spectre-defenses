@@ -113,7 +113,8 @@ CPU::CPU(const BaseO3CPUParams &params)
       globalFTSeqNum(1),
       system(params.system),
       lastRunningCycle(curCycle()),
-      cpuStats(this)
+      cpuStats(this),
+      recon(this, params)
 {
     fatal_if(FullSystem && params.numThreads > 1,
             "SMT is not supported in O3 in full system mode currently.");
@@ -335,11 +336,24 @@ CPU::CPU(const BaseO3CPUParams &params)
     /*** [Jiyong, STT] ***/
     STT = params.STT;
     impChannel = params.implicitChannel;
-    cprintf("applySTT = %d, implicit_channel = %d\n",
-            STT, impChannel);
+    cprintf("applySTT = %d, implicit_channel = %d, ReCon = %d\n",
+            STT, impChannel, recon.enabled());
 
     if (impChannel)
         assert(STT);
+
+    // [ReCon] ReCon lifts a secure speculation scheme's protection for
+    // values that scheme would otherwise guard. With no scheme to lift, it
+    // has nothing to do, and quietly enabling it would look like it did.
+    warn_if(recon.enabled() && !STT,
+            "ReCon is enabled but no secure speculation scheme is: it will "
+            "detect and track leakage but change no execution.");
+}
+
+bool
+CPU::reconReveal(Addr paddr, bool secure)
+{
+    return iew.ldstQueue.sendReconReveal(paddr, secure);
 }
 
 void

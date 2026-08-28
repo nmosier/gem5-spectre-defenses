@@ -1336,6 +1336,13 @@ Commit::commitHead(const DynInstPtr &head_inst, unsigned inst_num)
 
     updateComInstStats(head_inst);
 
+    // [ReCon] The instruction is now committing for certain, so this runs
+    // once per committed instruction, in program order -- exactly what
+    // load-pair detection needs. A pair is only meaningful once the second
+    // load is non-speculative, which is why detection lives here rather
+    // than at the load's visibility point.
+    cpu->recon.commitInst(head_inst);
+
     DPRINTF(Commit,
             "[tid:%i] [sn:%llu] Committing instruction with PC %s\n",
             tid, head_inst->seqNum, head_inst->pcState());
@@ -1351,7 +1358,8 @@ Commit::commitHead(const DynInstPtr &head_inst, unsigned inst_num)
         assert(yrotValid(head_inst->yrotDests));
         const RenameEntry rename_entry(
             head_inst->renamedDestIdx(i),
-            head_inst->yrotDests);
+            head_inst->yrotDests,
+            head_inst->yrotDestsUnique);
         renameMap[tid]->setEntry(head_inst->flattenedDestIdx(i),
                                  rename_entry);
     }

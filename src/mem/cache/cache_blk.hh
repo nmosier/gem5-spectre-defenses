@@ -183,6 +183,7 @@ class CacheBlk : public TaggedEntry
             setPrefetched();
         }
         setCoherenceBits(other.coherence);
+        setReconRevealed(other.getReconRevealed());
         setTaskId(other.getTaskId());
         setPartitionId(other.getPartitionId());
         setWhenReady(curTick());
@@ -205,6 +206,7 @@ class CacheBlk : public TaggedEntry
 
         clearPrefetched();
         clearCoherenceBits(AllBits);
+        setReconRevealed(0);
 
         setTaskId(context_switch_task_id::Unknown);
         setPartitionId(std::numeric_limits<uint64_t>::max());
@@ -259,6 +261,17 @@ class CacheBlk : public TaggedEntry
 
     /** Marks this blocks as a recently prefetched block. */
     void setPrefetched() { _prefetched = true; }
+
+    /**
+     * [ReCon] Reveal state of this block: bit i is set if the aligned
+     * 8-byte word at offset 8*i has been revealed by non-speculative
+     * execution, and so may be read speculatively without protection.
+     * A freshly allocated block reveals nothing.
+     */
+    uint64_t getReconRevealed() const { return _reconRevealed; }
+    void setReconRevealed(uint64_t mask) { _reconRevealed = mask; }
+    void revealReconWords(uint64_t mask) { _reconRevealed |= mask; }
+    void concealReconWords(uint64_t mask) { _reconRevealed &= ~mask; }
 
     /**
      * Get tick at which block's data will be available for access.
@@ -506,6 +519,12 @@ class CacheBlk : public TaggedEntry
 
     /** Whether this block is an unaccessed hardware prefetch. */
     bool _prefetched = 0;
+
+    /**
+     * [ReCon] One bit per aligned 8-byte word of this block, set if the
+     * word has been revealed by non-speculative execution.
+     */
+    uint64_t _reconRevealed = 0;
 };
 
 /**
@@ -550,6 +569,11 @@ class TempCacheBlk final : public CacheBlk
     {
         CacheBlk::insert(tag);
         _addr = tag.address;
+
+        // [ReCon] Unlike a tagged block, which is guaranteed invalid before
+        // insertion, this one is reused in place. Clear the reveal state so
+        // it cannot describe the line that was here before.
+        setReconRevealed(0);
     }
 
     /**

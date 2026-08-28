@@ -153,6 +153,8 @@ class MemCmd
         HTMAbort,
         // Tlb shootdown
         TlbiExtSync,
+        // ReCon: mark a word as revealed by non-speculative execution.
+        ReconRevealReq,
         NUM_MEM_CMDS
     };
 
@@ -378,7 +380,12 @@ class Packet : public Printable, public Extensible<Packet>
 
         // Signal block present to squash prefetch and cache evict packets
         // through express snoop flag
-        BLOCK_CACHED          = 0x00010000
+        BLOCK_CACHED          = 0x00010000,
+
+        // [ReCon] The reconRevealedMask field carries meaningful data. A
+        // packet without this flag is treated as "nothing revealed", which
+        // is always the safe interpretation.
+        RECON_VALID           = 0x00020000
     };
 
     Flags flags;
@@ -436,6 +443,15 @@ class Packet : public Printable, public Extensible<Packet>
      * This is used for correctness/debugging only.
      */
     uint64_t htmTransactionUid;
+
+    // [ReCon]
+
+    /**
+     * One bit per aligned 8-byte word of the cache line this packet
+     * addresses, set if that word has been revealed by non-speculative
+     * execution. Only meaningful when the RECON_VALID flag is set.
+     */
+    uint64_t reconRevealedMask;
 
   public:
 
@@ -807,6 +823,22 @@ class Packet : public Printable, public Extensible<Packet>
     bool isBlockCached() const     { return flags.isSet(BLOCK_CACHED); }
     void clearBlockCached()        { flags.clear(BLOCK_CACHED); }
 
+    // [ReCon] Reveal state of the addressed cache line, one bit per aligned
+    // 8-byte word. Carried down on writebacks and back up on read responses.
+    void
+    setReconRevealed(uint64_t mask)
+    {
+        flags.set(RECON_VALID);
+        reconRevealedMask = mask;
+    }
+    bool hasReconRevealed() const { return flags.isSet(RECON_VALID); }
+    /** Returns 0 (nothing revealed) unless a mask was explicitly set. */
+    uint64_t
+    getReconRevealed() const
+    {
+        return hasReconRevealed() ? reconRevealedMask : 0;
+    }
+
     /**
      * QoS Value getter
      * Returns 0 if QoS value was never set (constructor default).
@@ -932,6 +964,7 @@ class Packet : public Printable, public Extensible<Packet>
           _qosValue(0),
           htmReturnReason(HtmCacheFailure::NO_FAIL),
           htmTransactionUid(0),
+          reconRevealedMask(0),
           headerDelay(0),
           snoopDelay(0),
           payloadDelay(0),
@@ -980,6 +1013,7 @@ class Packet : public Printable, public Extensible<Packet>
           _qosValue(0),
           htmReturnReason(HtmCacheFailure::NO_FAIL),
           htmTransactionUid(0),
+          reconRevealedMask(0),
           headerDelay(0),
           snoopDelay(0),
           payloadDelay(0),
@@ -1016,6 +1050,7 @@ class Packet : public Printable, public Extensible<Packet>
           _qosValue(pkt->qosValue()),
           htmReturnReason(HtmCacheFailure::NO_FAIL),
           htmTransactionUid(0),
+          reconRevealedMask(0),
           headerDelay(pkt->headerDelay),
           snoopDelay(0),
           payloadDelay(pkt->payloadDelay),
@@ -1035,6 +1070,9 @@ class Packet : public Printable, public Extensible<Packet>
                 pkt->getHtmTransactionFailedInCacheRC()
             );
         }
+
+        if (pkt->hasReconRevealed())
+            setReconRevealed(pkt->getReconRevealed());
 
         // should we allocate space for data, or not, the express
         // snoops do not need to carry any data as they only serve to

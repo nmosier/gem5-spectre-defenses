@@ -462,6 +462,13 @@ ROB::updateTail()
 void
 ROB::squash(InstSeqNum squash_num, ThreadID tid)
 {
+    // [ReCon] The untaint records of the squashed instructions can never be
+    // consulted again -- sequence numbers are not reused, so nothing that
+    // still exists names them. Drop them so the table stays the size of
+    // what is in flight. This runs before the empty-ROB early return below,
+    // which Commit::squashAll takes.
+    cpu->recon.squash(squash_num);
+
     if (isEmpty(tid)) {
         DPRINTF(ROB, "Does not need to squash due to being empty "
                 "[sn:%llu]\n",

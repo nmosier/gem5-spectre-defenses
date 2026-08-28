@@ -912,6 +912,14 @@ class LSQ
     /** Another store port is in use */
     void cachePortBusy(bool is_load);
 
+    /**
+     * [ReCon] Tell the L1 that the word at a physical address holds a value
+     * non-speculative execution has already exposed. The message carries no
+     * data, expects no response, and is never retried: losing one only
+     * forgoes an optimization. Returns whether it was sent.
+     */
+    bool sendReconReveal(Addr paddr, bool secure);
+
     RequestPort &getDataPort() { return dcachePort; }
 
     void sendRetryResp();

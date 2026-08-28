@@ -250,6 +250,8 @@ MemCmd::commandInfo[] =
     { {IsRead, IsResponse}, InvalidCmd, "HTMReqResp" },
     { {IsRead, IsRequest}, InvalidCmd, "HTMAbort" },
     { {IsRequest}, InvalidCmd, "TlbiExtSync" },
+    // ReCon reveal: fire-and-forget, no data, no response.
+    { {IsRequest}, InvalidCmd, "ReconRevealReq" },
 };
 // clang-format on
 

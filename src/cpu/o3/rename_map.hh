@@ -67,10 +67,23 @@ struct RenameEntry
     PhysRegIdPtr physReg;
     InstSeqNum yrot = InvalidYRoT; // [STT++]
 
+    /**
+     * [ReCon] Whether yrot stands for a single root of taint rather than
+     * the largest of several.
+     *
+     * STT can summarise a value's roots by their maximum because untainting
+     * is monotone in sequence number: retire the youngest root and every
+     * older one is retired too. ReCon breaks that -- it retires one
+     * specific load's taint while older roots still stand -- so rewriting
+     * the maximum would silently discard the others. A value is only safe
+     * to untaint that way when the maximum is all there is.
+     */
+    bool yrotUnique = true;
+
     RenameEntry() = default;
 
-    RenameEntry(PhysRegIdPtr phys_reg, InstSeqNum yrot)
-        : physReg(phys_reg), yrot(yrot)
+    RenameEntry(PhysRegIdPtr phys_reg, InstSeqNum yrot, bool unique = true)
+        : physReg(phys_reg), yrot(yrot), yrotUnique(unique)
     {
     }
 
@@ -136,7 +149,8 @@ class SimpleRenameMap
      * @return A RenameInfo pair indicating both the new and previous
      * physical registers.
      */
-    RenameInfo rename(const RegId& arch_reg, InstSeqNum yrot);
+    RenameInfo rename(const RegId& arch_reg, InstSeqNum yrot,
+                      bool yrot_unique);
 
     /**
      * Look up the physical register mapped to an architectural register.
@@ -228,7 +242,7 @@ class UnifiedRenameMap
      * physical registers.
      */
     RenameInfo
-    rename(const RegId& arch_reg, InstSeqNum yrot)
+    rename(const RegId& arch_reg, InstSeqNum yrot, bool yrot_unique)
     {
         if (!arch_reg.isRenameable()) {
             // misc regs aren't really renamed, just remapped
@@ -244,7 +258,8 @@ class UnifiedRenameMap
             return RenameInfo(entry, entry);
         }
 
-        return renameMaps[arch_reg.classValue()].rename(arch_reg, yrot);
+        return renameMaps[arch_reg.classValue()].rename(arch_reg, yrot,
+                                                        yrot_unique);
     }
 
     /**
@@ -259,14 +274,14 @@ class UnifiedRenameMap
     {
         auto reg_class = arch_reg.classValue();
         if (reg_class == InvalidRegClass) {
-            return RenameEntry(&invalidPhysRegId, NoYRoT);
+            return RenameEntry(&invalidPhysRegId, NoYRoT, true);
          } else if (reg_class == MiscRegClass) {
             // misc regs aren't really renamed, they keep the same
             // mapping throughout the execution.
             // [STT++] FIXME: Should misc regs be tainted?
             return RenameEntry(
                 regFile->getMiscRegId(arch_reg.index()),
-                NoYRoT);
+                NoYRoT, true);
         }
         return renameMaps[reg_class].lookup(arch_reg);
     }

@@ -71,6 +71,7 @@
 #include "enums/SMTQueuePolicy.hh"
 #include "mem/packet.hh"
 #include "mem/port.hh"
+#include "mem/recon.hh"
 #include "mem/request.hh"
 #include "params/BaseO3CPU.hh"
 #include "sim/cur_tick.hh"
@@ -281,6 +282,30 @@ LSQ::cachePortBusy(bool is_load)
     } else {
         usedStorePorts++;
     }
+}
+
+bool
+LSQ::sendReconReveal(Addr paddr, bool secure)
+{
+    // A reveal is off the critical path, so it yields to real accesses
+    // rather than waiting behind them or stalling them.
+    if (cacheBlocked() || !cachePortAvailable(false))
+        return false;
+
+    RequestPtr req = std::make_shared<Request>(
+        paddr, recon::WordSize, Request::PHYSICAL, cpu->dataRequestorId());
+    if (secure)
+        req->setFlags(Request::SECURE);
+
+    PacketPtr pkt = new Packet(req, MemCmd::ReconRevealReq);
+
+    if (!dcachePort.sendTimingReq(pkt)) {
+        delete pkt;
+        return false;
+    }
+
+    cachePortBusy(false);
+    return true;
 }
 
 void

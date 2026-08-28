@@ -410,6 +410,34 @@ class Sequencer : public RubyPort
      */
     bool llscCheckMonitor(const Addr);
 
+    /**
+     * [ReCon] Mark the words a reveal message names as revealed, if the L1
+     * still holds the line. A reveal is a hint: one that misses is dropped,
+     * because failing to reveal only forgoes an optimization.
+     */
+    void reconReveal(PacketPtr pkt) override;
+
+    /**
+     * [ReCon] Tell a load which of the words it read had already been
+     * revealed, so the core can lift its speculative protection for them.
+     */
+    void reconStampResponse(PacketPtr pkt);
+
+    /** [ReCon] A store conceals the words it writes. */
+    void reconConceal(Addr addr, unsigned size);
+
+    struct ReconStats : public statistics::Group
+    {
+        ReconStats(statistics::Group *parent);
+
+        /** Reveal messages that found the line in this L1. */
+        statistics::Scalar revealHits;
+        /** Reveal messages dropped because the line was not resident. */
+        statistics::Scalar revealMisses;
+        /** Load responses reporting at least one revealed word. */
+        statistics::Scalar revealedReads;
+    } reconStats;
+
 
     /**
      * Removes all addresses from the local monitor.

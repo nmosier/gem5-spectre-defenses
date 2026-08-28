@@ -92,6 +92,7 @@ BaseCache::BaseCache(const BaseCacheParams &p, unsigned blk_size)
       prefetcher(p.prefetcher),
       writeAllocator(p.write_allocator),
       writebackClean(p.writeback_clean),
+      recon(p.recon),
       tempBlockWriteback(nullptr),
       writebackTempBlockAtomicEvent([this]{ writebackTempBlockAtomic(); },
                                     name(), false,
@@ -783,6 +784,13 @@ BaseCache::functionalAccess(PacketPtr pkt, bool from_cpu_side)
         && pkt->trySatisfyFunctional(&cbpw, blk_addr, is_secure, blkSize,
                                      blk->data);
 
+    // [ReCon] A functional write puts new bytes straight into the block --
+    // syscall emulation and debugger writes both arrive this way. Those
+    // bytes have not been revealed by anything, so conceal them, exactly as
+    // a timing store would.
+    if (recon && blk && blk->isValid() && pkt->isWrite())
+        blk->concealReconWords(reconAccessMask(pkt));
+
     // data we have is dirty if marked as such or if we have an
     // in-service MSHR that is pending a modified line
     bool have_dirty =
@@ -1143,6 +1151,30 @@ BaseCache::updateCompressionData(CacheBlk *&blk, const uint64_t* data,
 }
 
 void
+BaseCache::handleReconReveal(PacketPtr pkt)
+{
+    assert(pkt->cmd == MemCmd::ReconRevealReq);
+
+    if (recon) {
+        // A plain tag lookup: a reveal must not allocate, and must not
+        // disturb replacement state either.
+        CacheBlk *blk = tags->findBlock({pkt->getAddr(), pkt->isSecure()});
+        if (blk && blk->isValid()) {
+            blk->revealReconWords(reconAccessMask(pkt));
+            stats.reconRevealHits++;
+            DPRINTF(Cache, "ReCon: reveal %s -> %#x\n", pkt->print(),
+                    blk->getReconRevealed());
+        } else {
+            stats.reconRevealMisses++;
+            DPRINTF(Cache, "ReCon: reveal %s dropped, line not resident\n",
+                    pkt->print());
+        }
+    }
+
+    delete pkt;
+}
+
+void
 BaseCache::satisfyRequest(PacketPtr pkt, CacheBlk *blk, bool, bool)
 {
     assert(pkt->isRequest());
@@ -1193,6 +1225,10 @@ BaseCache::satisfyRequest(PacketPtr pkt, CacheBlk *blk, bool, bool)
         } else {
             cmpAndSwap(blk, pkt);
         }
+        // [ReCon] The written words hold a value that has not been revealed
+        // by non-speculative execution yet.
+        if (recon)
+            blk->concealReconWords(reconAccessMask(pkt));
     } else if (pkt->isWrite()) {
         // we have the block in a writable state and can go ahead,
         // note that the line may be also be considered writable in
@@ -1208,6 +1244,10 @@ BaseCache::satisfyRequest(PacketPtr pkt, CacheBlk *blk, bool, bool)
         // supply data to any snoops that have appended themselves to
         // this cache before knowing the store will fail.
         blk->setCoherenceBits(CacheBlk::DirtyBit);
+        // [ReCon] A store conceals its target: the words now hold a value
+        // that non-speculative execution has never exposed.
+        if (recon)
+            blk->concealReconWords(reconAccessMask(pkt));
         DPRINTF(CacheVerbose, "%s for %s (write)\n", __func__, pkt->print());
     } else if (pkt->isRead()) {
         if (pkt->isLLSC()) {
@@ -1217,9 +1257,27 @@ BaseCache::satisfyRequest(PacketPtr pkt, CacheBlk *blk, bool, bool)
         // all read responses have a data payload
         assert(pkt->hasRespData());
         pkt->setDataFromBlock(blk->data, blkSize);
+
+        // [ReCon] Hand the line's reveal state to the reader: a CPU load
+        // uses the bit of the word it read, a filling cache above adopts the
+        // whole vector. If the reader is taking the line writable it becomes
+        // the owner of the reveal state, so we must forget ours -- it would
+        // otherwise go stale the moment the reader stores to the line.
+        if (recon) {
+            pkt->setReconRevealed(blk->getReconRevealed());
+            if (blk->getReconRevealed() & reconAccessMask(pkt))
+                stats.reconRevealedReads++;
+            if (pkt->needsWritable())
+                blk->setReconRevealed(0);
+        }
     } else if (pkt->isUpgrade()) {
         // sanity check
         assert(!pkt->hasSharers());
+
+        // [ReCon] The requestor is about to gain write permission, so it
+        // owns the reveal state from here on.
+        if (recon)
+            blk->setReconRevealed(0);
 
         if (blk->isSet(CacheBlk::DirtyBit)) {
             // we were in the Owned state, and a cache above us that
@@ -1231,6 +1289,10 @@ BaseCache::satisfyRequest(PacketPtr pkt, CacheBlk *blk, bool, bool)
     } else if (pkt->isClean()) {
         blk->clearCoherenceBits(CacheBlk::DirtyBit);
     } else {
+        panic_if(pkt->cmd == MemCmd::ReconRevealReq,
+                 "A ReCon reveal reached the cache access path; the cpu-side "
+                 "port should have absorbed it. Is something other than a "
+                 "cache attached to the CPU's data port?");
         assert(pkt->isInvalidate());
         invalidateBlock(blk);
         DPRINTF(CacheVerbose, "%s for %s (invalidation)\n", __func__,
@@ -1426,6 +1488,18 @@ BaseCache::access(PacketPtr pkt, CacheBlk *&blk, Cycles &lat,
         // nothing else to do; writeback doesn't expect response
         assert(!pkt->needsResponse());
 
+        // [ReCon] A dirty writeback comes from the owner of the reveal
+        // state and carries new data, so it replaces whatever we held --
+        // any bit we kept would refer to a value that no longer exists. A
+        // clean writeback leaves the data alone, so the evicting reader's
+        // reveals simply join ours.
+        if (recon) {
+            if (pkt->cmd == MemCmd::WritebackDirty)
+                blk->setReconRevealed(pkt->getReconRevealed());
+            else
+                blk->revealReconWords(pkt->getReconRevealed());
+        }
+
         updateBlockData(blk, pkt, has_old_data);
         DPRINTF(Cache, "%s new state is %s\n", __func__, blk->print());
         incHitCount(pkt);
@@ -1442,6 +1516,11 @@ BaseCache::access(PacketPtr pkt, CacheBlk *&blk, Cycles &lat,
         lat = calculateTagOnlyLatency(pkt->headerDelay, tag_latency);
 
         if (blk) {
+            // [ReCon] The evicted copy was clean, so its reveals still
+            // describe the data we hold and can be merged in.
+            if (recon)
+                blk->revealReconWords(pkt->getReconRevealed());
+
             // Found the block in the tags, need to stop CleanEvict from
             // propagating further down the hierarchy. Returning true will
             // treat the CleanEvict like a satisfied write request and delete
@@ -1500,6 +1579,11 @@ BaseCache::access(PacketPtr pkt, CacheBlk *&blk, Cycles &lat,
         }
         // nothing else to do; writeback doesn't expect response
         assert(!pkt->needsResponse());
+
+        // [ReCon] A WriteClean carries the owner's data down with it, so
+        // its reveal state replaces ours.
+        if (recon)
+            blk->setReconRevealed(pkt->getReconRevealed());
 
         updateBlockData(blk, pkt, has_old_data);
         DPRINTF(Cache, "%s new state is %s\n", __func__, blk->print());
@@ -1655,6 +1739,13 @@ BaseCache::handleFill(PacketPtr pkt, CacheBlk *blk, PacketList &writebacks,
         assert(pkt->getSize() == blkSize);
 
         updateBlockData(blk, pkt, has_old_data);
+
+        // [ReCon] Adopt the reveal state the level below sent up with the
+        // line. A response that carries no reveal state (e.g. straight from
+        // memory) leaves the line fully concealed, which is the safe
+        // default a freshly allocated block already has.
+        if (recon)
+            blk->setReconRevealed(pkt->getReconRevealed());
     }
     // The block will be ready when the payload arrives and the fill is done
     blk->setWhenReady(clockEdge(fillLatency) + pkt->headerDelay +
@@ -1793,6 +1884,11 @@ BaseCache::writebackBlk(CacheBlk *blk)
     pkt->allocate();
     pkt->setDataFromBlock(blk->data, blkSize);
 
+    // [ReCon] Carry the reveal state down with the data, so the level below
+    // keeps it after we drop the line.
+    if (recon)
+        pkt->setReconRevealed(blk->getReconRevealed());
+
     // When a block is compressed, it must first be decompressed before being
     // sent for writeback.
     if (compressor) {
@@ -1837,6 +1933,10 @@ BaseCache::writecleanBlk(CacheBlk *blk, Request::Flags dest, PacketId id)
 
     pkt->allocate();
     pkt->setDataFromBlock(blk->data, blkSize);
+
+    // [ReCon] Carry the reveal state down with the data.
+    if (recon)
+        pkt->setReconRevealed(blk->getReconRevealed());
 
     // When a block is compressed, it must first be decompressed before being
     // sent for writeback.
@@ -2301,6 +2401,12 @@ BaseCache::CacheStats::CacheStats(BaseCache &c)
              "average number of cycles each access was blocked"),
     ADD_STAT(writebacks, statistics::units::Count::get(),
              "number of writebacks"),
+    ADD_STAT(reconRevealHits, statistics::units::Count::get(),
+             "number of ReCon reveal requests that found the line resident"),
+    ADD_STAT(reconRevealMisses, statistics::units::Count::get(),
+             "number of ReCon reveal requests dropped on a tag miss"),
+    ADD_STAT(reconRevealedReads, statistics::units::Count::get(),
+             "number of read hits reporting at least one revealed word"),
     ADD_STAT(demandMshrHits, statistics::units::Count::get(),
              "number of demand (read+write) MSHR hits"),
     ADD_STAT(overallMshrHits, statistics::units::Count::get(),
@@ -2622,6 +2728,14 @@ bool
 BaseCache::CpuSidePort::recvTimingReq(PacketPtr pkt)
 {
     assert(pkt->isRequest());
+
+    if (pkt->cmd == MemCmd::ReconRevealReq) {
+        // [ReCon] A reveal is a hint, not an access: it never allocates,
+        // never responds, and never blocks the port. Absorb it here so it
+        // stays clear of the MSHR and retry machinery.
+        cache.handleReconReveal(pkt);
+        return true;
+    }
 
     if (cache.system->bypassCaches()) {
         // Just forward the packet if caches are disabled.

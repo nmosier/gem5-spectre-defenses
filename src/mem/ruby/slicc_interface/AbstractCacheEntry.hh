@@ -101,11 +101,28 @@ class AbstractCacheEntry : public ReplaceableEntry
     void clearLocked();
     bool isLocked(int context) const;
 
+    /**
+     * [ReCon] Which aligned 8-byte words of this line hold a value that
+     * non-speculative execution has already exposed, one bit per word.
+     *
+     * This is metadata beside the coherence protocol, not part of it: the
+     * state machine neither reads nor writes it, and the mask is dropped
+     * whenever the line is (re)allocated, so it can never describe data
+     * that is not here. See mem/recon.hh.
+     */
+    uint64_t getReconRevealed() const { return m_recon_revealed; }
+    void setReconRevealed(uint64_t mask) { m_recon_revealed = mask; }
+    void revealReconWords(uint64_t mask) { m_recon_revealed |= mask; }
+    void concealReconWords(uint64_t mask) { m_recon_revealed &= ~mask; }
+
     // Address of this block, required by CacheMemory
     Addr m_Address;
     // Holds info whether the address is locked.
     // Required for implementing LL/SC operations.
     int m_locked;
+
+    // [ReCon] Reveal state of this line, one bit per aligned 8-byte word.
+    uint64_t m_recon_revealed;
 
     AccessPermission m_Permission; // Access permission for this
                                    // block, required by CacheMemory

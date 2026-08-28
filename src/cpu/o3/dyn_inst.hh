@@ -213,6 +213,9 @@ class DynInst : public ExecContext, public RefCounted
         // [Jiyong,STT] The following are STT flags
         IsUnsquashable,     // a instr is not squashable.
         HasPendingSquash,   // for branch/load, if a squash is postponed due to the tainted dependent operands
+        // [ReCon] This load read a word the memory hierarchy reported as
+        // already revealed by non-speculative execution.
+        ReconRevealed,
         MaxFlags
     };
 
@@ -385,6 +388,15 @@ class DynInst : public ExecContext, public RefCounted
     InstSeqNum yrotDests = InvalidYRoT;
     InstSeqNum yrotXmits = InvalidYRoT;
 
+    /**
+     * [ReCon] Whether each YRoT above names a single root of taint rather
+     * than the largest of several. Only a single root may be retired out of
+     * sequence-number order; see RenameEntry::yrotUnique.
+     */
+    bool yrotSrcsUnique = true;
+    bool yrotDestsUnique = true;
+    bool yrotXmitsUnique = true;
+
     /////////////////////// TLB Miss //////////////////////
     /**
      * Saved memory request (needed when the DTB address translation is
@@ -416,6 +428,10 @@ class DynInst : public ExecContext, public RefCounted
 
     bool hasPendingSquash() const { return instFlags[HasPendingSquash]; }
     void hasPendingSquash(bool f) { instFlags[HasPendingSquash] = f; }
+
+    /*** [ReCon] ***/
+    bool reconRevealed() const { return instFlags[ReconRevealed]; }
+    void reconRevealed(bool f) { instFlags[ReconRevealed] = f; }
   
     bool notAnInst() const { return instFlags[NotAnInst]; }
     void setNotAnInst() { instFlags[NotAnInst] = true; }

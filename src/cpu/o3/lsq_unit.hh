@@ -280,6 +280,12 @@ class LSQUnit
     /** [STT] Update Visbible State. */
     void updateVisibleState();
 
+    /**
+     * [ReCon] Mark a load whose response reports every word it read as
+     * already revealed, and tell ReCon it is no longer a root of taint.
+     */
+    void checkReconRevealed(const DynInstPtr &inst, PacketPtr pkt);
+
     /** Completes the data access that has been returned from the
      * memory system. */
     void completeDataAccess(PacketPtr pkt);

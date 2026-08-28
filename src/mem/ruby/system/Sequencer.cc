@@ -41,6 +41,8 @@
 
 #include "mem/ruby/system/Sequencer.hh"
 
+#include "mem/recon.hh"
+
 #include "base/logging.hh"
 #include "base/str.hh"
 #include "cpu/testers/rubytest/RubyTester.hh"
@@ -65,7 +67,8 @@ namespace ruby
 
 Sequencer::Sequencer(const Params &p)
     : RubyPort(p), m_IncompleteTimes(MachineType_NUM),
-      deadlockCheckEvent([this]{ wakeup(); }, "Sequencer deadlock check")
+      deadlockCheckEvent([this]{ wakeup(); }, "Sequencer deadlock check"),
+      reconStats(this)
 {
     m_outstanding_count = 0;
 
@@ -195,6 +198,77 @@ Sequencer::llscStoreConditional(const Addr claddr)
         line->clearLocked();
         return false;
     }
+}
+
+void
+Sequencer::reconReveal(PacketPtr pkt)
+{
+    if (m_dataCache_ptr == NULL)
+        return;
+
+    const Addr addr = pkt->getAddr();
+    AbstractCacheEntry *line = m_dataCache_ptr->lookup(makeLineAddress(addr));
+    if (!line) {
+        // Not resident: drop it, exactly as the classic implementation does.
+        reconStats.revealMisses++;
+        DPRINTF(RubySequencer, "ReCon: reveal of %#x dropped, not resident\n",
+                addr);
+        return;
+    }
+
+    reconStats.revealHits++;
+
+    line->revealReconWords(
+        recon::wordMask(addr, pkt->getSize(), m_ruby_system->getBlockSizeBytes()));
+
+    DPRINTF(RubySequencer, "ReCon: revealed %#x, line mask now %#x\n",
+            addr, line->getReconRevealed());
+}
+
+void
+Sequencer::reconStampResponse(PacketPtr pkt)
+{
+    if (m_dataCache_ptr == NULL)
+        return;
+
+    AbstractCacheEntry *line =
+        m_dataCache_ptr->lookup(makeLineAddress(pkt->getAddr()));
+    if (!line)
+        return;
+
+    const uint64_t revealed = line->getReconRevealed();
+    pkt->setReconRevealed(revealed);
+
+    if (revealed & recon::wordMask(pkt->getAddr(), pkt->getSize(),
+                                   m_ruby_system->getBlockSizeBytes()))
+        reconStats.revealedReads++;
+}
+
+Sequencer::ReconStats::ReconStats(statistics::Group *parent)
+    : statistics::Group(parent, "recon"),
+      ADD_STAT(revealHits, statistics::units::Count::get(),
+               "number of ReCon reveal messages that found the line here"),
+      ADD_STAT(revealMisses, statistics::units::Count::get(),
+               "number of ReCon reveal messages dropped, line not resident"),
+      ADD_STAT(revealedReads, statistics::units::Count::get(),
+               "number of load responses reporting a revealed word")
+{
+}
+
+void
+Sequencer::reconConceal(Addr addr, unsigned size)
+{
+    if (m_dataCache_ptr == NULL)
+        return;
+
+    AbstractCacheEntry *line = m_dataCache_ptr->lookup(makeLineAddress(addr));
+    if (!line)
+        return;
+
+    // The written words now hold a value non-speculative execution has never
+    // exposed.
+    line->concealReconWords(
+        recon::wordMask(addr, size, m_ruby_system->getBlockSizeBytes()));
 }
 
 bool
@@ -795,6 +869,11 @@ Sequencer::hitCallback(SequencerRequest *srequest, DataBlock &data,
             pkt->setData(
                 data.getData(getOffset(request_address), pkt->getSize()));
 
+            // [ReCon] Tell the core which of the words it just read are
+            // already public, so it can lift the protection the secure
+            // speculation scheme would otherwise apply to them.
+            reconStampResponse(pkt);
+
            if (type == RubyRequestType_ATOMIC_RETURN) {
                DPRINTF(RubySequencer, "ATOMIC RETURN data %s\n", data);
            } else {
@@ -808,6 +887,7 @@ Sequencer::hitCallback(SequencerRequest *srequest, DataBlock &data,
                 data.getData(getOffset(request_address), pkt->getSize()));
             data.setData(&overwrite_val[0],
                          getOffset(request_address), pkt->getSize());
+            reconConceal(request_address, pkt->getSize());
             DPRINTF(RubySequencer, "swap data %s\n", data);
         } else if (pkt->isAtomicOp()) {
             // Set the data in the packet to the old value in the cache
@@ -817,6 +897,7 @@ Sequencer::hitCallback(SequencerRequest *srequest, DataBlock &data,
             // execute AMO operation
             (*(pkt->getAtomicOp()))(
                 data.getDataMod(getOffset(request_address)));
+            reconConceal(request_address, pkt->getSize());
             DPRINTF(RubySequencer, "AMO new data %s\n", data);
         } else if (!pkt->isStashOnce() &&
                    (type != RubyRequestType_Store_Conditional ||
@@ -824,6 +905,9 @@ Sequencer::hitCallback(SequencerRequest *srequest, DataBlock &data,
             // Types of stores set the actual data here, apart from
             // failed Store Conditional requests
             data.setData(pkt);
+            // [ReCon] A store conceals its target: these words now hold a
+            // value non-speculative execution has never exposed.
+            reconConceal(request_address, pkt->getSize());
             DPRINTF(RubySequencer, "set data %s\n", data);
         }
     }

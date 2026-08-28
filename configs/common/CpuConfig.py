@@ -59,10 +59,31 @@ def config_scheme(cpu_cls, cpu_list, options):
                 "to run simulation with DerivO3CPU")
 
         print("**********")
-        print("info: Configure for DerivO3CPU. threat_model=%s; STT=%d; implicit_channel=%d"\
-            % (options.threat_model, options.STT, options.implicit_channel))
+        print("info: Configure for DerivO3CPU. threat_model=%s; STT=%d; implicit_channel=%d; ReCon=%d"\
+            % (options.threat_model, options.STT, options.implicit_channel,
+               getattr(options, "recon", 0)))
         print("**********")
         for cpu in cpu_list:
+            # [ReCon] ReCon only relaxes an underlying scheme's protection,
+            # so it is meaningless without one.
+            if getattr(options, "recon", 0):
+                # Reveal state has to live somewhere. Ruby keeps it in the
+                # L1 the sequencer already points at; the classic hierarchy
+                # keeps it in the cache blocks. With neither, a reveal
+                # message would travel to the memory controller, which
+                # cannot interpret it.
+                if not getattr(options, "ruby", False) and not getattr(
+                    options, "caches", False
+                ):
+                    fatal(
+                        "ReCon needs caches to hold reveal state. Add "
+                        "--caches or --ruby, or run without --recon."
+                    )
+                cpu.recon = True
+                cpu.reconLPTEntries = getattr(options, "recon_lpt_entries", 0)
+            else:
+                cpu.recon = False
+
             if len(options.threat_model) != 0:
                 cpu.threatModel = options.threat_model
 

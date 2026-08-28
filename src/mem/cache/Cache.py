@@ -152,6 +152,13 @@ class BaseCache(ClockedObject):
     # set to False.
     writeback_clean = Param.Bool(False, "Writeback clean lines")
 
+    # [ReCon] Track which words of each line have been revealed by
+    # non-speculative execution, so that a secure speculation scheme can
+    # lift its protection for loads of those words. Turning this off at a
+    # given level makes that level transparent to ReCon, which is how the
+    # L1-only and L1+L2 configurations are expressed.
+    recon = Param.Bool(False, "Track ReCon reveal state per cache line")
+
     # Control whether this cache should be mostly inclusive or mostly
     # exclusive with respect to upstream caches. The behaviour on a
     # fill is determined accordingly. For a mostly inclusive cache,

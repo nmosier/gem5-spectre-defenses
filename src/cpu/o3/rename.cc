@@ -755,9 +755,13 @@ Rename::renameInsts(ThreadID tid)
         assert(yrotValid(inst->yrotSrcs) && yrotValid(inst->yrotXmits) &&
                !yrotValid(inst->yrotDests));
 	if (inst->isAccess()) {
+            // A load's result is rooted in the load itself, and in nothing
+            // else -- exactly one root, whatever its address depended on.
             inst->yrotDests = inst->seqNum;
+            inst->yrotDestsUnique = true;
 	} else {
             inst->yrotDests = inst->yrotSrcs;
+            inst->yrotDestsUnique = inst->yrotSrcsUnique;
         }
         assert(yrotValid(inst->yrotDests));
 
@@ -1059,6 +1063,39 @@ Rename::removeFromHistory(InstSeqNum inst_seq_num, ThreadID tid)
     }
 }
 
+namespace {
+
+/**
+ * [ReCon] Fold one source operand's roots of taint into a running summary
+ * of (largest root, is that the only one).
+ *
+ * STT keeps only the largest root, which is a sound summary of "is anything
+ * here still tainted" while untainting is monotone in sequence number.
+ * ReCon retires one specific root out of order, and rewriting the largest
+ * would then discard the rest -- so we also track whether there is anything
+ * else to discard.
+ */
+void
+foldRoot(InstSeqNum &yrot, bool &unique, const RenameEntry &src)
+{
+    if (src.yrot == NoYRoT)
+        return; // this operand carries no root at all
+
+    if (yrot == NoYRoT) {
+        yrot = src.yrot;
+        unique = src.yrotUnique;
+        return;
+    }
+
+    // Two operands naming the same single root still leave one root.
+    if (yrot != src.yrot || !src.yrotUnique)
+        unique = false;
+
+    yrot = std::max(yrot, src.yrot);
+}
+
+} // anonymous namespace
+
 void
 Rename::renameSrcRegs(const DynInstPtr &inst, ThreadID tid)
 {
@@ -1071,6 +1108,8 @@ Rename::renameSrcRegs(const DynInstPtr &inst, ThreadID tid)
     assert(!yrotValid(inst->yrotXmits) && !yrotValid(inst->yrotSrcs));
     inst->yrotXmits = NoYRoT;
     inst->yrotSrcs = NoYRoT;
+    inst->yrotSrcsUnique = true;
+    inst->yrotXmitsUnique = true;
 
     // Get the architectual register numbers from the source and
     // operands, and redirect them to the right physical register.
@@ -1134,9 +1173,9 @@ Rename::renameSrcRegs(const DynInstPtr &inst, ThreadID tid)
         }
 
         // [STT++] Update YRoT for transmitters and srcs.
-        inst->yrotSrcs = std::max(inst->yrotSrcs, rename_entry.yrot);
+        foldRoot(inst->yrotSrcs, inst->yrotSrcsUnique, rename_entry);
         if (inst->staticInst->srcTransmitted(src_idx))
-            inst->yrotXmits = std::max(inst->yrotXmits, rename_entry.yrot);
+            foldRoot(inst->yrotXmits, inst->yrotXmitsUnique, rename_entry);
 
         ++stats.lookups;
     }
@@ -1158,7 +1197,8 @@ Rename::renameDestRegs(const DynInstPtr &inst, ThreadID tid)
         RegId flat_dest_regid = dest_reg.flatten(*isa);
         flat_dest_regid.setNumPinnedWrites(dest_reg.getNumPinnedWrites());
 
-        rename_result = map->rename(flat_dest_regid, inst->yrotDests);
+        rename_result = map->rename(flat_dest_regid, inst->yrotDests,
+                                    inst->yrotDestsUnique);
 
         inst->flattenedDestIdx(dest_idx, flat_dest_regid);
 

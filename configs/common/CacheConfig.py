@@ -75,6 +75,25 @@ def _get_cache_opts(level, options):
     return opts
 
 
+def _recon_at(level, options):
+    """[ReCon] Whether a cache level should track reveal state.
+
+    Restricting ReCon to the upper levels is the tradeoff studied in
+    Section 6.5 of the paper: a level that does not track simply forgets
+    reveals, which costs performance and never correctness.
+    """
+    if not getattr(options, "recon", 0):
+        return False
+
+    levels = getattr(options, "recon_cache_levels", "all")
+    if levels == "l1":
+        return level == "l1d"
+    if levels == "l1l2":
+        return level in ("l1d", "l2")
+    # Instruction fetches never take part in ReCon: only loads reveal.
+    return level != "l1i"
+
+
 def config_cache(options, system):
     if options.external_memory_system and (options.caches or options.l2cache):
         print("External caches and internal caches are exclusive options.\n")
@@ -134,6 +153,7 @@ def config_cache(options, system):
         system.l2 = l2_cache_class(
             clk_domain=system.cpu_clk_domain, **_get_cache_opts("l2", options)
         )
+        system.l2.recon = _recon_at("l2", options)
 
         system.tol2bus = L2XBar(clk_domain=system.cpu_clk_domain)
         system.l2.cpu_side = system.tol2bus.mem_side_ports
@@ -146,6 +166,7 @@ def config_cache(options, system):
         if options.caches:
             icache = icache_class(**_get_cache_opts("l1i", options))
             dcache = dcache_class(**_get_cache_opts("l1d", options))
+            dcache.recon = _recon_at("l1d", options)
 
             # If we are using ISA.X86 or ISA.RISCV, we set walker caches.
             if ObjectList.cpu_list.get_isa(options.cpu_type) in [

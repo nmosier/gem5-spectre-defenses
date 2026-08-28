@@ -180,6 +180,13 @@ class RubyPort : public ClockedObject
 
     virtual int functionalWrite(Packet *func_pkt);
 
+    /**
+     * [ReCon] Apply a reveal hint to this port's L1 data cache. Ports that
+     * have no such cache ignore it, which is safe: a reveal that does not
+     * land only forgoes an optimization.
+     */
+    virtual void reconReveal(PacketPtr pkt) {}
+
     // Helper methods for commonly used functions called in common/address.hh
     Addr getOffset(Addr addr) const;
     Addr makeLineAddress(Addr addr) const;

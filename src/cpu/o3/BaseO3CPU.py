@@ -248,6 +248,16 @@ class BaseO3CPU(BaseCPU):
     STT = Param.Bool(False, "Apply STT protection mechanism")
     implicitChannel = Param.Bool(False, "If handling implicit channel")
 
+    # [ReCon] Detect direct-dependence load pairs at commit and reveal the
+    # address the first load read, so the underlying secure speculation
+    # scheme can stop protecting values that are already public.
+    recon = Param.Bool(False, "Apply the ReCon optimization")
+    reconLPTEntries = Param.Unsigned(
+        0,
+        "Entries in the ReCon load-pair table; 0 means one per physical "
+        "integer register, which never conflicts",
+    )
+
 add_citation(
     BaseO3CPU,
     """@inproceedings{10.1145/3613424.3614258,
