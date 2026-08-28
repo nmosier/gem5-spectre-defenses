@@ -59,8 +59,9 @@ def config_scheme(cpu_cls, cpu_list, options):
                 "to run simulation with DerivO3CPU")
 
         print("**********")
-        print("info: Configure for DerivO3CPU. threat_model=%s; STT=%d; implicit_channel=%d"\
-            % (options.threat_model, options.STT, options.implicit_channel))
+        print("info: Configure for DerivO3CPU. threat_model=%s; STT=%d; implicit_channel=%d; doppelganger_loads=%d"\
+            % (options.threat_model, options.STT, options.implicit_channel,
+               getattr(options, "doppelganger_loads", 0)))
         print("**********")
         for cpu in cpu_list:
             if len(options.threat_model) != 0:
@@ -75,6 +76,17 @@ def config_scheme(cpu_cls, cpu_list, options):
                 cpu.implicitChannel = True;
             else:
                 cpu.implicitChannel = False;
+
+            # [Doppelganger] Doppelgangers only stand in for loads that the
+            # underlying scheme delays, so they are meaningless without one.
+            if getattr(options, "doppelganger_loads", 0):
+                cpu.doppelgangerLoads = True
+                cpu.addrPredEntries = options.addr_pred_entries
+                cpu.addrPredAssoc = options.addr_pred_assoc
+                cpu.addrPredConfBits = options.addr_pred_conf_bits
+                cpu.addrPredConfThreshold = options.addr_pred_conf_threshold
+            else:
+                cpu.doppelgangerLoads = False
     else:
         print("not DerivO3CPU")
 

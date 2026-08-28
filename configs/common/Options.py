@@ -698,6 +698,22 @@ def addCommonOptions(parser, default_isa: Optional[ISA] = None):
                         help="Whether using STT mechanism(threat_model mustn't be Unsafe.")
     parser.add_argument("--implicit_channel", default=None, action="store", type=int,
                         help="Whether enabling defense mechanism for implicit channel")
+    # [Doppelganger] add options for Doppelganger Loads
+    parser.add_argument("--doppelganger_loads", default=0, action="store",
+                        type=int,
+                        help="Issue address-predicted doppelgangers for the "
+                             "loads the secure speculation scheme delays")
+    parser.add_argument("--addr_pred_entries", default=1024, action="store",
+                        type=int, help="Address predictor entries")
+    parser.add_argument("--addr_pred_assoc", default=8, action="store",
+                        type=int, help="Address predictor associativity")
+    parser.add_argument("--addr_pred_conf_bits", default=2, action="store",
+                        type=int,
+                        help="Width of an address predictor confidence counter")
+    parser.add_argument("--addr_pred_conf_threshold", default=1,
+                        action="store", type=int,
+                        help="Confidence an entry needs before its stride is "
+                             "acted on")
 
 def addSEOptions(parser):
     # Benchmark options

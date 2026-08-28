@@ -53,11 +53,13 @@
 #include "cpu/checker/cpu.hh"
 #include "cpu/inst_seq.hh"
 #include "cpu/o3/cpu.hh"
+#include "cpu/o3/doppelganger.hh"
 #include "cpu/o3/dyn_inst.hh"
 #include "cpu/o3/dyn_inst_ptr.hh"
 #include "cpu/o3/limits.hh"
 #include "cpu/o3/lsq.hh"
 #include "debug/HtmCpu.hh"
+#include "debug/Doppelganger.hh"
 #include "debug/LSQUnit.hh"
 #include "mem/htm.hh"
 #include "mem/packet.hh"
@@ -280,6 +282,16 @@ LSQUnit::LSQUnitStats::LSQUnitStats(statistics::Group *parent)
                "Number of stores squashed"),
       ADD_STAT(rescheduledLoads, statistics::units::Count::get(),
                "Number of loads that were rescheduled"),
+      ADD_STAT(doppelgangersIssued, statistics::units::Count::get(),
+               "Number of predicted accesses issued for delayed loads"),
+      ADD_STAT(doppelgangerHits, statistics::units::Count::get(),
+               "Number of loads satisfied by their doppelganger"),
+      ADD_STAT(doppelgangerMispredicts, statistics::units::Count::get(),
+               "Number of loads whose doppelganger had the wrong access"),
+      ADD_STAT(doppelgangersStaled, statistics::units::Count::get(),
+               "Number of preloads dropped because a write invalidated them"),
+      ADD_STAT(doppelgangerWaits, statistics::units::Count::get(),
+               "Number of loads that waited on an in-flight doppelganger"),
       ADD_STAT(blockedByCache, statistics::units::Count::get(),
                "Number of times an access to memory failed due to the cache "
                "being blocked"),
@@ -461,6 +473,16 @@ LSQUnit::checkSnoop(PacketPtr pkt)
     assert(pkt->isInvalidate());
 
     DPRINTF(LSQUnit, "Got snoop for address %#x\n", pkt->getAddr());
+
+    // [Doppelganger] Someone else took this line away, so anything preloaded
+    // from it may already describe a value that is gone. This is the
+    // memory-consistency half of the scheme: the preload is dropped, the
+    // load re-fetches, and ordering is decided by the load exactly as it
+    // would have been without a doppelganger.
+    {
+        const Addr snoop_begin = pkt->getAddr() & ~(Addr)cacheBlockMask;
+        staleDoppelgangers(snoop_begin, snoop_begin + cacheBlockMask + 1);
+    }
 
     for (int x = 0; x < cpu->numContexts(); x++) {
         gem5::ThreadContext *tc = cpu->getContext(x);
@@ -955,6 +977,12 @@ LSQUnit::writebackStores()
         /* Send to cache */
         request->sendPacketToCache();
 
+        // [Doppelganger] These bytes are about to change, so a preload of
+        // them is out of date. A store still in the queue is handled by
+        // store-to-load forwarding instead; this covers the ones that have
+        // left it.
+        staleDoppelgangers(inst->effAddr, inst->effAddr + inst->effSize);
+
         /* If successful, do the post send */
         if (request->isSent()) {
             storePostSend();
@@ -1002,6 +1030,9 @@ LSQUnit::squash(const InstSeqNum &squashed_num)
             DPRINTF(HtmCpu, ">> htmStarts (%d) : htmStops-- (%d)\n",
               htmStarts, htmStops);
         }
+        // [Doppelganger] The predicted access has nothing left to serve.
+        discardDoppelganger(loadQueue.back().instruction());
+
         // Clear the smart pointer to make sure it is decremented.
         loadQueue.back().instruction()->setSquashed();
         loadQueue.back().clear();
@@ -1127,6 +1158,12 @@ void
 LSQUnit::writeback(const DynInstPtr &inst, PacketPtr pkt)
 {
     iewStage->wakeCPU();
+
+    // [Doppelganger] However this load ended up with its data, it has it
+    // now, so nothing more is expected of its stand-in. Every completing
+    // load passes through here, which makes this the one place that is sure
+    // to free it.
+    discardDoppelganger(inst);
 
     // Squashed instructions do not need to complete their access.
     if (inst->isSquashed()) {
@@ -1620,6 +1657,14 @@ LSQUnit::read(LSQRequest *request, ssize_t load_idx)
         }
     }
 
+    // [Doppelganger] No store had the data. If a predicted access already
+    // fetched exactly what this load wants, take it from there and skip the
+    // cache entirely -- that saved latency is the whole point of the scheme.
+    // Note this sits after store-to-load forwarding, so a store always wins:
+    // a preload never hides a value that has not reached memory yet.
+    if (completeFromDoppelganger(load_inst, request, load_entry))
+        return NoFault;
+
     // If there's no forwarding case, then go access memory
     DPRINTF(LSQUnit, "Doing memory access for inst [sn:%lli] PC %s\n",
             load_inst->seqNum, load_inst->pcState());
@@ -1753,6 +1798,206 @@ SQEntry::clear()
 
 LSQUnit::LSQUnit(const LSQUnit &l) : stats(nullptr)
 { panic("LSQUnit is not copy-able"); }
+
+
+void
+LSQUnit::issueDoppelganger(const DynInstPtr &inst)
+{
+    // Nothing to stand in for without a prediction, and never two at once.
+    if (!inst->hasPredAddr() || inst->doppelganger || inst->isSquashed())
+        return;
+
+    // Only a plain load can be stood in for. Anything with side effects or
+    // ordering requirements has to make its own access.
+    if (!inst->isLoad() || inst->isAtomic() || inst->isStoreConditional())
+        return;
+
+    // A predicted access that straddles a cache line would need two
+    // translations and two packets. Dropping it costs an opportunity, which
+    // is all a doppelganger ever is.
+    if (transferNeedsBurst(inst->predAddr, inst->predSize,
+                           cpu->cacheLineSize()))
+        return;
+
+    auto *doppelganger =
+        new DoppelgangerRequest(this, inst, inst->predAddr, inst->predSize);
+
+    if (doppelganger->start()) {
+        inst->doppelganger = doppelganger;
+        ++stats.doppelgangersIssued;
+    }
+}
+
+bool
+LSQUnit::sendDoppelgangerPacket(PacketPtr pkt)
+{
+    // Take a load port only if one is going spare this cycle. A predicted
+    // access must never push a real one out of the way, and it is not worth
+    // queueing for a retry: by the time the port frees up the load it stands
+    // in for may well have run.
+    if (lsq->cacheBlocked() || !lsq->cachePortAvailable(true))
+        return false;
+
+    if (!dcachePort->sendTimingReq(pkt))
+        return false;
+
+    lsq->cachePortBusy(true);
+    return true;
+}
+
+void
+LSQUnit::discardDoppelganger(const DynInstPtr &inst)
+{
+    if (inst->doppelganger) {
+        inst->doppelganger->abandon();
+        inst->doppelganger = nullptr;
+    }
+}
+
+void
+LSQUnit::staleDoppelgangers(Addr begin, Addr end)
+{
+    // A write to these bytes means any preload of them describes a value
+    // that is no longer there. The load must go and fetch it itself.
+    for (const LQEntry &entry : loadQueue) {
+        if (!entry.valid())
+            continue;
+
+        const DynInstPtr &inst = entry.instruction();
+        if (inst && inst->doppelganger &&
+            inst->doppelganger->overlaps(begin, end) &&
+            !inst->doppelganger->dead()) {
+            inst->doppelganger->markStale();
+            ++stats.doppelgangersStaled;
+        }
+    }
+}
+
+bool
+LSQUnit::completeFromDoppelganger(const DynInstPtr &load_inst,
+                                  LSQRequest *request, LQEntry &load_entry)
+{
+    DoppelgangerRequest *doppelganger = load_inst->doppelganger;
+    if (!doppelganger)
+        return false;
+
+    const RequestPtr &req = request->mainReq();
+
+    // This is the paper's implicit branch "did the prediction match?", and
+    // it is resolved here, at the point the load is finally allowed to
+    // compute its address -- never earlier. Resolving it while the address
+    // was still considered secret is what would turn the doppelganger into
+    // a side channel.
+    const bool matched = doppelganger->vaddr() == req->getVaddr() &&
+        doppelganger->size() == req->getSize();
+
+    // A prediction that hit the right address is still no use if the load
+    // needs something a plain read cannot give it.
+    const bool usable = matched && doppelganger->ready() &&
+        !req->isLLSC() && !req->isUncacheable() && !req->isStrictlyOrdered() &&
+        !req->isLocalAccess() && !req->isHTMCmd();
+
+    // The address is right but the data has not landed yet. Wait for it
+    // rather than starting the access over: the doppelganger has a head
+    // start on the memory system that a fresh access would throw away.
+    if (matched && doppelganger->pending() && !doppelganger->dead() &&
+        !req->isLLSC() && !req->isUncacheable() && !req->isStrictlyOrdered() &&
+        !req->isLocalAccess() && !req->isHTMCmd()) {
+        DPRINTF(Doppelganger, "[sn:%llu] load of %#x waits on its "
+                "doppelganger\n", load_inst->seqNum, req->getVaddr());
+        doppelganger->await();
+        ++stats.doppelgangerWaits;
+        return true;
+    }
+
+    if (!usable) {
+        if (!matched) {
+            ++stats.doppelgangerMispredicts;
+            DPRINTF(Doppelganger, "[sn:%llu] mispredicted: wanted %#x/%u, "
+                    "doppelganger fetched %#x/%u\n", load_inst->seqNum,
+                    req->getVaddr(), req->getSize(),
+                    doppelganger->vaddr(), doppelganger->size());
+        } else {
+            DPRINTF(Doppelganger, "[sn:%llu] right address %#x but unusable "
+                    "(ready=%d)\n", load_inst->seqNum, req->getVaddr(),
+                    doppelganger->ready());
+        }
+        discardDoppelganger(load_inst);
+        return false;
+    }
+
+    DPRINTF(Doppelganger, "[sn:%llu] load of %#x satisfied by its "
+            "doppelganger; no cache access needed\n",
+            load_inst->seqNum, req->getVaddr());
+
+    if (!load_inst->memData)
+        load_inst->memData = new uint8_t[req->getSize()];
+    std::memcpy(load_inst->memData, doppelganger->data(), req->getSize());
+
+    PacketPtr data_pkt = new Packet(req, MemCmd::ReadReq);
+    data_pkt->dataStatic(load_inst->memData);
+
+    if (request->isAnyOutstandingRequest()) {
+        // An earlier attempt at this load still has packets in flight; make
+        // sure their responses are dropped rather than written back.
+        request->discard();
+        load_entry.setRequest(nullptr);
+    }
+
+    discardDoppelganger(load_inst);
+
+    WritebackEvent *wb = new WritebackEvent(load_inst, data_pkt, this);
+    cpu->schedule(wb, curTick());
+
+    ++stats.doppelgangerHits;
+    return true;
+}
+
+void
+LSQUnit::completeAwaitedLoad(DoppelgangerRequest *doppelganger)
+{
+    const DynInstPtr inst = doppelganger->instruction();
+
+    LSQRequest *request = inst->savedRequest;
+
+    // If the data went stale while we waited, or the load's own request has
+    // gone, the load has to make the access itself.
+    if (doppelganger->dead() || !request || inst->isSquashed()) {
+        DPRINTF(Doppelganger, "[sn:%llu] waited doppelganger is no longer "
+                "usable; replaying the load\n", inst->seqNum);
+        discardDoppelganger(inst);
+
+        if (!inst->isSquashed()) {
+            iewStage->rescheduleMemInst(inst);
+            inst->clearIssued();
+            inst->effAddrValid(false);
+            ++stats.rescheduledLoads;
+            if (request) {
+                loadQueue[inst->lqIdx].setRequest(nullptr);
+                request->discard();
+            }
+        }
+        return;
+    }
+
+    const RequestPtr &req = request->mainReq();
+
+    if (!inst->memData)
+        inst->memData = new uint8_t[req->getSize()];
+    std::memcpy(inst->memData, doppelganger->data(), req->getSize());
+
+    PacketPtr data_pkt = new Packet(req, MemCmd::ReadReq);
+    data_pkt->dataStatic(inst->memData);
+
+    DPRINTF(Doppelganger, "[sn:%llu] doppelganger data arrived; completing "
+            "the load of %#x\n", inst->seqNum, req->getVaddr());
+
+    discardDoppelganger(inst);
+
+    ++stats.doppelgangerHits;
+    WritebackEvent *wb = new WritebackEvent(inst, data_pkt, this);
+    cpu->schedule(wb, curTick());
+}
 
 // [SafeSpec] update FenceDelay State
 /*** [Jiyong,STT] update logic for STT ***/

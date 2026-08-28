@@ -113,7 +113,8 @@ CPU::CPU(const BaseO3CPUParams &params)
       globalFTSeqNum(1),
       system(params.system),
       lastRunningCycle(curCycle()),
-      cpuStats(this)
+      cpuStats(this),
+      addrPred(this, params)
 {
     fatal_if(FullSystem && params.numThreads > 1,
             "SMT is not supported in O3 in full system mode currently.");
@@ -335,11 +336,18 @@ CPU::CPU(const BaseO3CPUParams &params)
     /*** [Jiyong, STT] ***/
     STT = params.STT;
     impChannel = params.implicitChannel;
-    cprintf("applySTT = %d, implicit_channel = %d\n",
-            STT, impChannel);
+    cprintf("applySTT = %d, implicit_channel = %d, doppelgangerLoads = %d\n",
+            STT, impChannel, addrPred.enabled());
 
     if (impChannel)
         assert(STT);
+
+    // [Doppelganger] Doppelgangers stand in for loads that a secure
+    // speculation scheme delays. With nothing delaying loads there is
+    // nothing to stand in for, and the predictor would only cost accesses.
+    warn_if(addrPred.enabled() && !STT,
+            "Doppelganger Loads are enabled but no secure speculation "
+            "scheme is: no load is delayed, so none will be predicted.");
 }
 
 void

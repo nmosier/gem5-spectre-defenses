@@ -323,6 +323,10 @@ Decode::squash(const DynInstPtr &inst, bool control_miss, ThreadID tid)
     DPRINTF(Decode, "[tid:%i] [sn:%llu] Squashing due to incorrect branch "
             "prediction detected at decode.\n", tid, inst->seqNum);
 
+    // [Doppelganger] Rewind the predictions of everything younger than the
+    // mispredicting branch.
+    cpu->addrPred.squash(inst->seqNum);
+
     // Send back mispredict information.
     toFetch->decodeInfo[tid].branchMispredict = true;
     toFetch->decodeInfo[tid].controlMispredict = control_miss;
@@ -378,6 +382,11 @@ Decode::squash(const DynInstPtr &inst, bool control_miss, ThreadID tid)
 unsigned
 Decode::squash(ThreadID tid)
 {
+    // [Doppelganger] The predictions made for the instructions being thrown
+    // away have to be rewound, or the running address stays permanently
+    // ahead of where execution actually is.
+    cpu->addrPred.squash(fromCommit->commitInfo[tid].doneSeqNum);
+
     DPRINTF(Decode, "[tid:%i] Squashing.\n",tid);
 
     if (decodeStatus[tid] == Blocked ||
@@ -690,6 +699,23 @@ Decode::decodeInsts(ThreadID tid)
             --insts_available;
 
             continue;
+        }
+
+        // [Doppelganger] Ask the address predictor where this load will go.
+        // Decode is the right place: it is in program order and once per
+        // dynamic instance, which is what the predictor's running address
+        // assumes. The answer comes from committed history alone, so it is
+        // safe to act on long before the load's own address is allowed to
+        // be computed.
+        if (inst->isLoad() && cpu->addrPred.enabled()) {
+            Addr pred_addr;
+            unsigned pred_size;
+            if (cpu->addrPred.predict(
+                    addrPredKey(inst->pcState().instAddr(),
+                                inst->pcState().microPC()),
+                    inst->seqNum, pred_addr, pred_size)) {
+                inst->setPredAddr(pred_addr, pred_size);
+            }
         }
 
         // Also check if instructions have no source registers.  Mark

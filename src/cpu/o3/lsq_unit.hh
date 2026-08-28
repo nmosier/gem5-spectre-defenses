@@ -67,6 +67,7 @@ namespace o3
 {
 
 class CPU;
+class DoppelgangerRequest;
 class DynInst;
 class IEW;
 
@@ -279,6 +280,42 @@ class LSQUnit
 
     /** [STT] Update Visbible State. */
     void updateVisibleState();
+
+    /**
+     * [Doppelganger] Start a predicted memory access for a load the secure
+     * speculation scheme is holding back, so the memory latency is spent
+     * during the delay rather than after it.
+     */
+    void issueDoppelganger(const DynInstPtr &inst);
+
+    /**
+     * [Doppelganger] Send a doppelganger's packet, but only if a load port
+     * is going spare. Predicted accesses yield to real ones and are never
+     * retried.
+     */
+    bool sendDoppelgangerPacket(PacketPtr pkt);
+
+    /**
+     * [Doppelganger] Satisfy a load from its doppelganger if the predicted
+     * access turned out to be the one it wanted. Returns whether it did.
+     */
+    bool completeFromDoppelganger(const DynInstPtr &load_inst,
+                                  LSQRequest *request, LQEntry &load_entry);
+
+    /** [Doppelganger] Throw away a load's doppelganger, if it has one. */
+    void discardDoppelganger(const DynInstPtr &inst);
+
+    /**
+     * [Doppelganger] Hand a waiting load the data its doppelganger just
+     * fetched, or send it to fetch its own if that data turned out stale.
+     */
+    void completeAwaitedLoad(DoppelgangerRequest *doppelganger);
+
+    /**
+     * [Doppelganger] Mark stale every preload that a write to
+     * [begin, end) has just invalidated.
+     */
+    void staleDoppelgangers(Addr begin, Addr end);
 
     /** Completes the data access that has been returned from the
      * memory system. */
@@ -551,6 +588,16 @@ class LSQUnit
 
         /** Number of loads that were rescheduled. */
         statistics::Scalar rescheduledLoads;
+        /** [Doppelganger] Predicted accesses started. */
+        statistics::Scalar doppelgangersIssued;
+        /** [Doppelganger] Loads satisfied by their doppelganger. */
+        statistics::Scalar doppelgangerHits;
+        /** [Doppelganger] Loads whose doppelganger had the wrong access. */
+        statistics::Scalar doppelgangerMispredicts;
+        /** [Doppelganger] Preloads dropped because a write invalidated them. */
+        statistics::Scalar doppelgangersStaled;
+        /** [Doppelganger] Loads that waited on an in-flight doppelganger. */
+        statistics::Scalar doppelgangerWaits;
 
         /** Number of times the LSQ is blocked due to the cache. */
         statistics::Scalar blockedByCache;

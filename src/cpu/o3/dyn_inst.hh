@@ -82,6 +82,7 @@ class LSQRequest;
 class ThreadState;
 class LSQEntry;
 class SQEntry;
+class DoppelgangerRequest;
 
 class DynInst : public ExecContext, public RefCounted
 {
@@ -213,6 +214,9 @@ class DynInst : public ExecContext, public RefCounted
         // [Jiyong,STT] The following are STT flags
         IsUnsquashable,     // a instr is not squashable.
         HasPendingSquash,   // for branch/load, if a squash is postponed due to the tainted dependent operands
+        // [Doppelganger] The address predictor produced an address for this
+        // load, held in predAddr/predSize.
+        HasPredAddr,
         MaxFlags
     };
 
@@ -380,6 +384,17 @@ class DynInst : public ExecContext, public RefCounted
     ssize_t sqIdx = -1;
     SQIterator sqIt;
 
+    /**
+     * [Doppelganger] The address and size predicted for this load from
+     * committed history, and the predicted access made on their strength.
+     * Both are independent of anything this instruction's operands hold,
+     * which is what makes issuing the access safe while the real address is
+     * still considered secret.
+     */
+    Addr predAddr = 0;
+    unsigned predSize = 0;
+    DoppelgangerRequest *doppelganger = nullptr;
+
     /** YRoTs for source, destination, and transmitted register operands. */
     InstSeqNum yrotSrcs = InvalidYRoT;
     InstSeqNum yrotDests = InvalidYRoT;
@@ -416,6 +431,16 @@ class DynInst : public ExecContext, public RefCounted
 
     bool hasPendingSquash() const { return instFlags[HasPendingSquash]; }
     void hasPendingSquash(bool f) { instFlags[HasPendingSquash] = f; }
+
+    /*** [Doppelganger] ***/
+    bool hasPredAddr() const { return instFlags[HasPredAddr]; }
+    void
+    setPredAddr(Addr addr, unsigned size)
+    {
+        predAddr = addr;
+        predSize = size;
+        instFlags[HasPredAddr] = true;
+    }
   
     bool notAnInst() const { return instFlags[NotAnInst]; }
     void setNotAnInst() { instFlags[NotAnInst] = true; }

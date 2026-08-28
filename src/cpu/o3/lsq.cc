@@ -56,6 +56,7 @@
 #include "base/types.hh"
 #include "cpu/inst_seq.hh"
 #include "cpu/o3/cpu.hh"
+#include "cpu/o3/doppelganger.hh"
 #include "cpu/o3/dyn_inst.hh"
 #include "cpu/o3/dyn_inst_ptr.hh"
 #include "cpu/o3/iew.hh"
@@ -284,6 +285,12 @@ LSQ::cachePortBusy(bool is_load)
 }
 
 void
+LSQ::issueDoppelganger(const DynInstPtr &inst)
+{
+    thread.at(inst->threadNumber)->issueDoppelganger(inst);
+}
+
+void
 LSQ::insertLoad(const DynInstPtr &load_inst)
 {
     ThreadID tid = load_inst->threadNumber;
@@ -470,6 +477,23 @@ LSQ::recvTimingResp(PacketPtr pkt)
     if (pkt->isError())
         DPRINTF(LSQ, "Got error packet back for address: %#X\n",
                 pkt->getAddr());
+
+    // [Doppelganger] A predicted access belongs to no load queue request:
+    // it carries its own sender state and its data goes to the preload
+    // buffer, not to a register.
+    if (auto *doppelganger =
+            dynamic_cast<DoppelgangerRequest *>(pkt->senderState)) {
+        // The doppelganger owns this packet and frees it with itself; do
+        // not free it here.
+        doppelganger->recvTimingResp(pkt);
+
+        // An invalidation riding along still concerns every load queue.
+        if (pkt->isInvalidate()) {
+            for (ThreadID tid = 0; tid < numThreads; tid++)
+                thread[tid]->checkSnoop(pkt);
+        }
+        return true;
+    }
 
     LSQRequest *request = dynamic_cast<LSQRequest*>(pkt->senderState);
     panic_if(!request, "Got packet back with unknown sender state\n");

@@ -1336,6 +1336,18 @@ Commit::commitHead(const DynInstPtr &head_inst, unsigned inst_num)
 
     updateComInstStats(head_inst);
 
+    // [Doppelganger] Train the address predictor here and nowhere else.
+    // This instruction is committing, so its address is architectural: a
+    // prediction derived from it cannot carry anything a speculatively
+    // loaded value put there, which is what makes issuing a predicted
+    // access safe under the secure speculation scheme.
+    if (head_inst->isLoad() && head_inst->effAddrValid()) {
+        cpu->addrPred.update(
+            addrPredKey(head_inst->pcState().instAddr(),
+                        head_inst->pcState().microPC()),
+            head_inst->seqNum, head_inst->effAddr, head_inst->effSize);
+    }
+
     DPRINTF(Commit,
             "[tid:%i] [sn:%llu] Committing instruction with PC %s\n",
             tid, head_inst->seqNum, head_inst->pcState());

@@ -1662,10 +1662,22 @@ InstructionQueue::addToProducers(const DynInstPtr &new_inst)
         }
 
         if (!dependGraph.empty(dest_reg->flatIndex())) {
-            dependGraph.dump();
-            panic("Dependency graph %i (%s) (flat: %i) not empty!",
-                  dest_reg->index(), dest_reg->className(),
-                  dest_reg->flatIndex());
+            // A pinned register (e.g. the shared dest of a RISC-V
+            // vector macroop's microops) legitimately has multiple
+            // in-flight producers: every pinned write renames to the
+            // same physical register, and consumers stay linked in the
+            // chain until the final write completes and wakes them
+            // (completed() skips wakeDependents() while
+            // getNumPinnedWritesToComplete() != 0).  A non-empty chain
+            // is therefore legal here; just take over as the newest
+            // producer.  For any other register it means the graph
+            // leaked.
+            if (!dest_reg->isPinned()) {
+                dependGraph.dump();
+                panic("Dependency graph %i (%s) (flat: %i) not empty!",
+                      dest_reg->index(), dest_reg->className(),
+                      dest_reg->flatIndex());
+            }
         }
 
         dependGraph.setInst(dest_reg->flatIndex(), new_inst);

@@ -69,6 +69,7 @@
 #include "cpu/timebuf.hh"
 #include "params/BaseO3CPU.hh"
 #include "sim/process.hh"
+#include "cpu/o3/addr_pred.hh"
 #include "cpu/stt.hh"
 
 namespace gem5
@@ -628,6 +629,10 @@ class CPU : public BaseCPU
 
     // [STT++] The youngest nonspeculative instruction.
     InstSeqNum untaintBroadcast = NoYRoT;
+
+    // [Doppelganger] Predicts where a load will read, from committed
+    // history only, so that a delayed load's access can be started early.
+    AddressPredictor addrPred;
 };
 
 } // namespace o3

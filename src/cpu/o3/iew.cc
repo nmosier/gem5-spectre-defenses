@@ -1245,6 +1245,16 @@ IEW::executeInsts()
 	    if (cpu->STT && inst->isXmitTainted()) {
                 DPRINTF(IEW,
                         "STT: Delaying memory access due to tainted input.\n");
+
+                // [Doppelganger] The load has to wait because its address
+                // may depend on a secret. A predicted address does not, so
+                // the access can be made now and the memory latency spent
+                // during the wait instead of after it. If the prediction is
+                // right the load will be satisfied from it; if not, nothing
+                // has been lost but a spare cache port.
+                if (inst->isLoad())
+                    ldstQueue.issueDoppelganger(inst);
+
                 instQueue.deferMemInst(inst);
                 continue;
 	    }

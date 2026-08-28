@@ -903,6 +903,12 @@ class LSQ
     /** The IEW stage pointer. */
     IEW *iewStage;
 
+    /**
+     * [Doppelganger] Start a predicted access for a load that the secure
+     * speculation scheme is holding back.
+     */
+    void issueDoppelganger(const DynInstPtr &inst);
+
     /** Is D-cache blocked? */
     bool cacheBlocked() const;
     /** Set D-cache blocked status */

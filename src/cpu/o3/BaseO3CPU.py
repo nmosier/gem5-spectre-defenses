@@ -248,6 +248,21 @@ class BaseO3CPU(BaseCPU):
     STT = Param.Bool(False, "Apply STT protection mechanism")
     implicitChannel = Param.Bool(False, "If handling implicit channel")
 
+    # [Doppelganger] Issue a delayed load's memory access early using an
+    # address predicted from committed history, so the access overlaps the
+    # delay the secure speculation scheme imposes.
+    doppelgangerLoads = Param.Bool(
+        False, "Issue address-predicted doppelgangers for delayed loads"
+    )
+    addrPredEntries = Param.Unsigned(1024, "Address predictor entries")
+    addrPredAssoc = Param.Unsigned(8, "Address predictor associativity")
+    addrPredConfBits = Param.Unsigned(
+        2, "Width of an address predictor confidence counter"
+    )
+    addrPredConfThreshold = Param.Unsigned(
+        1, "Confidence an entry needs before its stride is acted on"
+    )
+
 add_citation(
     BaseO3CPU,
     """@inproceedings{10.1145/3613424.3614258,

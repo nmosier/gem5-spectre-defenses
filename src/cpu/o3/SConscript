@@ -51,10 +51,12 @@ if env['CONF']['BUILD_ISA']:
     SimObject('SMT.py',
         enums=['SMTFetchPolicy', 'SMTQueuePolicy', 'CommitPolicy'])
 
+    Source('addr_pred.cc')
     Source('bac.cc')
     Source('commit.cc')
     Source('cpu.cc')
     Source('decode.cc')
+    Source('doppelganger.cc')
     Source('dyn_inst.cc')
     Source('fetch.cc')
     Source('free_list.cc')
@@ -74,8 +76,10 @@ if env['CONF']['BUILD_ISA']:
     Source('thread_context.cc')
     Source('thread_state.cc')
 
+    DebugFlag('AddrPred')
     DebugFlag('BAC')
     DebugFlag('CommitRate')
+    DebugFlag('Doppelganger')
     DebugFlag('FTQ')
     DebugFlag('IEW')
     DebugFlag('IQ')
